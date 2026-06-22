@@ -1,10 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
 
-// ── Configuration ───────────────────────────────────────────────────────
-// These come from environment variables at build time (Vite injects any var
-// prefixed with VITE_). Set them in a .env file locally and as GitHub Actions
-// secrets for deployment. They are SAFE to expose in the browser bundle —
-// the anon key only grants what your Row Level Security policies allow.
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
@@ -14,59 +9,120 @@ export const supabase = supabaseConfigured
   ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
   : null;
 
-// ── Participant (registration) ──────────────────────────────────────────
-// We keep a local pointer to "who is logged in on this device" in
-// localStorage, but all entry data lives centrally in Supabase so the
-// research team can export and analyse it.
+// University of Malta academic entities, grouped by type for a two-level picker.
+// Source: um.edu.mt/academicentities (Faculties, Schools, Institutes, Centres).
+export const AFFILIATIONS = {
+  Faculty: [
+    "Faculty of Arts",
+    "Faculty for the Built Environment",
+    "Faculty of Dental Surgery",
+    "Faculty of Economics, Management & Accountancy",
+    "Faculty of Education",
+    "Faculty of Engineering",
+    "Faculty of Health Sciences",
+    "Faculty of Information & Communication Technology",
+    "Faculty of Laws",
+    "Faculty of Media & Knowledge Sciences",
+    "Faculty of Medicine & Surgery",
+    "Faculty of Science",
+    "Faculty for Social Wellbeing",
+    "Faculty of Theology",
+  ],
+  School: [
+    "Doctoral School",
+    "International School for Foundation Studies",
+    "School of Performing Arts",
+  ],
+  Institute: [
+    "Institute of Aerospace Technologies",
+    "Institute of Anglo-Italian Studies",
+    "Institute for Climate Change & Sustainable Development",
+    "Confucius Institute",
+    "Institute of Digital Games",
+    "Institute of Earth Systems",
+    "Edward de Bono Institute for Creative Thinking & Innovation",
+    "Institute for European Studies",
+    "Islands & Small States Institute",
+    "Institute of Linguistics & Language Technology",
+    "Institute of Maltese Studies",
+    "Mediterranean Academy of Diplomatic Studies",
+    "Mediterranean Institute",
+    "Institute for Physical Education & Sport",
+    "Institute of Space Sciences & Astronomy",
+    "Institute for Sustainable Energy",
+  ],
+  Centre: [
+    "Centre for Academic Literacies & English Communication Skills",
+    "Centre for Biomedical Cybernetics",
+    "Centre for Distributed Ledger Technologies",
+    "Centre for Entrepreneurship & Business Incubation",
+    "Centre for Environmental Education & Research",
+    "Centre for Labour Studies",
+    "Centre for Liberal Arts & Sciences",
+    "Centre for Molecular Medicine & Biobanking",
+    "Centre for Resilience & Socio-Emotional Health",
+    "Centre for the Study & Practice of Conflict Resolution",
+    "Centre for Traditional Chinese Medicine",
+    "University Semiconductors Competence Centre",
+  ],
+};
 
-const LOCAL_PARTICIPANT_KEY = "trace:participant";
+export const AFFILIATION_TYPES = Object.keys(AFFILIATIONS); // Faculty, School, Institute, Centre
 
-export function getLocalParticipant() {
-  try {
-    const raw = localStorage.getItem(LOCAL_PARTICIPANT_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
+// ── Auth ──────────────────────────────────────────────────────────────────
+export async function signUp({ email, password }) {
+  const { data, error } = await supabase.auth.signUp({ email, password });
+  if (error) throw error;
+  return data;
 }
 
-export function setLocalParticipant(p) {
-  localStorage.setItem(LOCAL_PARTICIPANT_KEY, JSON.stringify(p));
+export async function signIn({ email, password }) {
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error) throw error;
+  return data;
 }
 
-export function clearLocalParticipant() {
-  localStorage.removeItem(LOCAL_PARTICIPANT_KEY);
+export async function signOut() {
+  await supabase.auth.signOut();
 }
 
-// Register or re-attach a participant. participant_id is the study code
-// (e.g. "UM-0421"). Upsert means returning participants on a new device
-// simply re-link to their existing record.
-export async function registerParticipant({ participantId, name }) {
-  if (!supabase) throw new Error("Supabase not configured");
+export async function getSession() {
+  const { data } = await supabase.auth.getSession();
+  return data.session;
+}
+
+export function onAuthChange(cb) {
+  return supabase.auth.onAuthStateChange((_event, session) => cb(session));
+}
+
+// ── Profile ─────────────────────────────────────────────────────────────
+export async function getProfile(userId) {
   const { data, error } = await supabase
-    .from("participants")
+    .from("profiles")
+    .select("*")
+    .eq("id", userId)
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+export async function createProfile({ userId, alias, affiliationType, affiliation, participantId, consented }) {
+  const { data, error } = await supabase
+    .from("profiles")
     .upsert(
-      { participant_id: participantId, name, joined_at: new Date().toISOString() },
-      { onConflict: "participant_id", ignoreDuplicates: false }
+      { id: userId, alias, affiliation_type: affiliationType, affiliation, participant_id: participantId, consented },
+      { onConflict: "id" }
     )
     .select()
     .single();
   if (error) throw error;
-  const p = { id: data.participant_id, name: data.name, joined: data.joined_at };
-  setLocalParticipant(p);
-  return p;
+  return data;
 }
 
-// ── Daily entries ─────────────────────────────────────────────────────────
-// One row per participant per date. Upsert lets a student update today's log.
-export async function fetchEntries(participantId) {
-  if (!supabase) throw new Error("Supabase not configured");
-  const { data, error } = await supabase
-    .from("entries")
-    .select("*")
-    .eq("participant_id", participantId);
+// ── Entries ─────────────────────────────────────────────────────────────
+export async function fetchEntries(userId) {
+  const { data, error } = await supabase.from("entries").select("*").eq("user_id", userId);
   if (error) throw error;
-  // shape into a { "YYYY-MM-DD": {...} } map the UI expects
   const map = {};
   (data || []).forEach((row) => {
     map[row.entry_date] = {
@@ -80,11 +136,10 @@ export async function fetchEntries(participantId) {
   return map;
 }
 
-export async function saveEntry(participantId, dateKey, entry) {
-  if (!supabase) throw new Error("Supabase not configured");
+export async function saveEntry(userId, dateKey, entry) {
   const { error } = await supabase.from("entries").upsert(
     {
-      participant_id: participantId,
+      user_id: userId,
       entry_date: dateKey,
       ai_minutes: entry.aiMinutes,
       independent_minutes: entry.independentMinutes,
@@ -93,7 +148,53 @@ export async function saveEntry(participantId, dateKey, entry) {
       points: entry.points,
       updated_at: new Date().toISOString(),
     },
-    { onConflict: "participant_id,entry_date" }
+    { onConflict: "user_id,entry_date" }
   );
   if (error) throw error;
+}
+
+// ── Community (AI-free; reads the community_scores view only) ─────────────
+export async function fetchCommunity() {
+  const { data, error } = await supabase
+    .from("community_scores")
+    .select("*")
+    .order("total_points", { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+// ── Competitions ──────────────────────────────────────────────────────────
+export async function fetchCompetitions() {
+  const { data, error } = await supabase
+    .from("competitions")
+    .select("*")
+    .order("ends_on", { ascending: true });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function createCompetition({ name, metric, startsOn, endsOn, userId }) {
+  const { data, error } = await supabase
+    .from("competitions")
+    .insert({ name, metric, starts_on: startsOn, ends_on: endsOn, created_by: userId })
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function joinCompetition(competitionId, userId) {
+  const { error } = await supabase
+    .from("competition_members")
+    .upsert({ competition_id: competitionId, user_id: userId }, { onConflict: "competition_id,user_id" });
+  if (error) throw error;
+}
+
+export async function fetchMyCompetitions(userId) {
+  const { data, error } = await supabase
+    .from("competition_members")
+    .select("competition_id")
+    .eq("user_id", userId);
+  if (error) throw error;
+  return new Set((data || []).map((r) => r.competition_id));
 }
