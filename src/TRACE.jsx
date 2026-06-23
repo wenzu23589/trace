@@ -9,7 +9,8 @@ import {
   fetchCommunity, fetchCompetitions, createCompetition, joinCompetition, fetchMyCompetitions,
   fetchAdminChallenges, createAdminChallenge, deleteAdminChallenge,
 } from "./supabaseClient.js";
-import { POINTS, DAILY_MAX, MILESTONES, basePointsForEntry, streakBonus, pointsForEntry, independentShare, streakOf, STREAKS } from "./points.js";
+import { POINTS, DAILY_MAX, MILESTONES, basePointsForEntry, streakBonus, pointsForEntry, streakOf, STREAKS } from "./points.js";
+import { DEFAULT_ACTIVITIES, RELIANCE_LEVELS, TIME_BANDS, relianceToIndependence, dayIndependence } from "./activities.js";
 
 // ── Fresh palette: mint-sage + apricot on bone ───────────────────────────
 const C = {
@@ -32,16 +33,16 @@ const lbl = { fontFamily: SANS, fontSize: 11, letterSpacing: ".12em", textTransf
 const input = { width: "100%", padding: "11px 13px", border: `1px solid ${C.line}`, borderRadius: 9, fontSize: 14, fontFamily: SANS, boxSizing: "border-box", background: "#fff", color: C.ink };
 const primaryBtn = (active) => ({ width: "100%", padding: "12px", background: active ? C.mint : C.lineSoft, color: active ? "#fff" : C.hint, border: "none", borderRadius: 10, fontSize: 15, fontWeight: 600, cursor: active ? "pointer" : "default", fontFamily: SANS });
 
-// ── Balance bars (weekly, with % independent) ─────────────────────────────
+// ── Balance bars (weekly independence %) ─────────────────────────────────
 function BalanceBars({ entries }) {
   const days = useMemo(() => {
     const out = [];
     for (let i = 6; i >= 0; i--) {
       const d = new Date(); d.setDate(d.getDate() - i);
       const k = d.toISOString().slice(0, 10); const e = entries[k];
-      const ind = e?.independentMinutes || 0, ai = e?.aiMinutes || 0, total = ind + ai;
-      out.push({ k, ind, ai, total, share: total ? Math.round((ind / total) * 100) : null,
-        label: d.toLocaleDateString(undefined, { weekday: "short" }) });
+      const share = e ? dayIndependence(e.activities) : null;
+      const n = e?.activities?.length || 0;
+      out.push({ k, share, n, label: d.toLocaleDateString(undefined, { weekday: "short" }) });
     }
     return out;
   }, [entries]);
@@ -51,26 +52,25 @@ function BalanceBars({ entries }) {
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 2 }}>
-        <div style={{ fontSize: 13, color: C.faint }}>This week's balance</div>
-        <div style={{ fontSize: 12, color: C.hint }}>% independent</div>
+        <div style={{ fontSize: 13, color: C.faint }}>This week's independence</div>
+        <div style={{ fontSize: 12, color: C.hint }}>% your own work</div>
       </div>
-      <div style={{ fontSize: 11, color: C.hint, marginBottom: 16 }}>how much of each day's study was your own effort</div>
+      <div style={{ fontSize: 11, color: C.hint, marginBottom: 16 }}>how independently you worked across your activities</div>
       <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
         {days.map((d) => {
-          const indPct = d.total ? (d.ind / d.total) * 100 : 0;
-          const aiPct = d.total ? (d.ai / d.total) * 100 : 0;
+          const pct = d.share === null ? 0 : d.share;
           return (
             <div key={d.k} style={{ display: "flex", alignItems: "center", gap: 12 }}>
               <span style={{ fontSize: 12, color: C.faint, width: 32 }}>{d.label}</span>
               <div style={{ flex: 1, display: "flex", height: 16, borderRadius: 8, overflow: "hidden", background: C.lineSoft }}>
-                <div style={{ width: `${indPct}%`, background: C.mintBar }} />
-                <div style={{ width: `${aiPct}%`, background: C.apricotSoft }} />
+                <div style={{ width: `${pct}%`, background: C.mintBar }} />
+                <div style={{ width: `${100 - pct}%`, background: d.share === null ? "transparent" : C.apricotSoft }} />
               </div>
               <span style={{ fontSize: 13, fontWeight: 600, color: d.share === null ? C.hint : C.mintDeep, width: 38, textAlign: "right" }}>
                 {d.share === null ? "—" : `${d.share}%`}
               </span>
               <span style={{ fontSize: 11, color: C.hint, width: 66, textAlign: "right" }}>
-                {d.total ? `${d.ind} / ${d.total}m` : ""}
+                {d.n ? `${d.n} activit${d.n === 1 ? "y" : "ies"}` : ""}
               </span>
             </div>
           );
@@ -78,10 +78,10 @@ function BalanceBars({ entries }) {
       </div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: `0.5px solid ${C.line}`, marginTop: 16, paddingTop: 14 }}>
         <div style={{ display: "flex", gap: 16, fontSize: 12, color: C.faint }}>
-          <span><span style={{ display: "inline-block", width: 10, height: 10, background: C.mintBar, borderRadius: 3, marginRight: 5 }} />Independent</span>
-          <span><span style={{ display: "inline-block", width: 10, height: 10, background: C.apricotSoft, borderRadius: 3, marginRight: 5 }} />AI</span>
+          <span><span style={{ display: "inline-block", width: 10, height: 10, background: C.mintBar, borderRadius: 3, marginRight: 5 }} />Your own work</span>
+          <span><span style={{ display: "inline-block", width: 10, height: 10, background: C.apricotSoft, borderRadius: 3, marginRight: 5 }} />AI-assisted</span>
         </div>
-        {avg !== null && <div style={{ fontSize: 12, color: C.faint }}>Week average <span style={{ fontWeight: 600, color: C.mintDeep }}>{avg}% independent</span></div>}
+        {avg !== null && <div style={{ fontSize: 12, color: C.faint }}>Week average <span style={{ fontWeight: 600, color: C.mintDeep }}>{avg}% your own</span></div>}
       </div>
     </div>
   );
@@ -125,14 +125,23 @@ export default function TRACE() {
     let streak = 0, cursor = todayKey();
     if (!entries[cursor]) { const y = new Date(); y.setDate(y.getDate() - 1); cursor = y.toISOString().slice(0, 10); }
     while (entries[cursor]) { streak++; const d = new Date(cursor); d.setDate(d.getDate() - 1); cursor = d.toISOString().slice(0, 10); }
-    let weekIndependent = 0, aiToday = entries[todayKey()]?.aiMinutes || 0, tasksToday = entries[todayKey()]?.independentTasks || 0;
-    keys.forEach((k) => { if (daysBetween(k, todayKey()) < 7) weekIndependent += entries[k].independentMinutes || 0; });
+    let todayIndep = null; const te = entries[todayKey()];
+    if (te) todayIndep = dayIndependence(te.activities);
+    let weekIndepSum = 0, weekIndepDays = 0;
+    keys.forEach((k) => {
+      if (daysBetween(k, todayKey()) < 7) {
+        const ind = dayIndependence(entries[k].activities);
+        if (ind !== null) { weekIndepSum += ind; weekIndepDays++; }
+      }
+    });
+    const weekIndep = weekIndepDays ? Math.round(weekIndepSum / weekIndepDays) : null;
+    const todayActivities = te?.activities?.length || 0;
     const streaks = {
       logging: streakOf(entries, STREAKS.logging.test),
       independent: streakOf(entries, STREAKS.independent.test),
       reflection: streakOf(entries, STREAKS.reflection.test),
     };
-    return { totalPoints, streak, weekIndependent, aiToday, tasksToday, streaks };
+    return { totalPoints, streak, weekIndep, todayIndep, todayActivities, streaks };
   }, [entries]);
 
   const next = MILESTONES.find((m) => m.at > stats.totalPoints) || null;
@@ -206,9 +215,9 @@ export default function TRACE() {
 
           {/* metric tiles */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 12 }}>
-            <Tile icon="ti-book" tint={C.mintDeep} label="Independent" value={stats.weekIndependent} unit="min/wk" />
-            <Tile icon="ti-robot" tint={C.apricotInk} label="AI today" value={stats.aiToday} unit="min" />
-            <Tile icon="ti-checkbox" tint={C.mintDeep} label="Tasks solo" value={stats.tasksToday} unit="" />
+            <Tile icon="ti-book" tint={C.mintDeep} label="Independence" value={stats.weekIndep === null ? "—" : stats.weekIndep + "%"} unit="this wk" />
+            <Tile icon="ti-checklist" tint={C.apricotInk} label="Today" value={stats.todayIndep === null ? "—" : stats.todayIndep + "%"} unit="your own" />
+            <Tile icon="ti-list-check" tint={C.mintDeep} label="Activities" value={stats.todayActivities} unit="today" />
           </div>
 
           {/* milestone progress */}
@@ -226,8 +235,9 @@ export default function TRACE() {
 
           <DailyLog existing={today} streak={stats.streak}
             onSave={async (entry) => {
+              const independence = dayIndependence(entry.activities);
               const pts = pointsForEntry(entry, today ? stats.streak : stats.streak + 1);
-              const withPoints = { ...entry, points: pts };
+              const withPoints = { ...entry, independence, points: pts };
               const nextEntries = { ...entries, [todayKey()]: withPoints };
               setEntries(nextEntries);
               try { await saveEntry(session.user.id, todayKey(), withPoints); } catch (e) { console.error(e); }
@@ -374,7 +384,7 @@ function Community({ myId }) {
               </div>
               <div style={{ textAlign: "right" }}>
                 <div style={{ fontSize: 15, fontWeight: 600, color: C.mintDeep }}>{r.total_points} pts</div>
-                <div style={{ fontSize: 11, color: C.hint }}>{r.total_independent_minutes} min independent</div>
+                <div style={{ fontSize: 11, color: C.hint }}>{r.avg_independence}% your own work</div>
               </div>
             </div>
           );
@@ -467,59 +477,96 @@ function Competitions({ userId }) {
   );
 }
 
-// ── Daily log ─────────────────────────────────────────────────────────────
+// ── Daily log (per-activity) ───────────────────────────────────────────────
 function DailyLog({ existing, streak, onSave }) {
-  const [aiMinutes, setAi] = useState(existing?.aiMinutes ?? 0);
-  const [independentMinutes, setInd] = useState(existing?.independentMinutes ?? 0);
-  const [independentTasks, setTasks] = useState(existing?.independentTasks ?? 0);
+  const [activities, setActivities] = useState(existing?.activities ?? []);
   const [reflection, setRefl] = useState(existing?.reflection ?? "");
+  const [customName, setCustomName] = useState("");
   const [saved, setSaved] = useState(false);
   useEffect(() => {
-    setAi(existing?.aiMinutes ?? 0); setInd(existing?.independentMinutes ?? 0);
-    setTasks(existing?.independentTasks ?? 0); setRefl(existing?.reflection ?? "");
+    setActivities(existing?.activities ?? []);
+    setRefl(existing?.reflection ?? "");
   }, [existing]);
 
-  const draft = { aiMinutes, independentMinutes, independentTasks, reflection };
+  const draft = { activities, reflection };
   const base = basePointsForEntry(draft);
   const bonus = streakBonus(existing ? streak : streak + 1);
-  const share = independentShare(draft);
+  const indep = dayIndependence(activities);
 
-  const slider = (label, value, set, color) => (
-    <div style={{ marginBottom: 16 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-        <span style={{ fontSize: 14, color: C.body }}>{label}</span>
-        <span style={{ fontFamily: SERIF, fontSize: 15, fontWeight: 600, color }}>{value} min</span>
-      </div>
-      <input type="range" min={0} max={240} step={5} value={value} onChange={(e) => { set(Number(e.target.value)); setSaved(false); }} style={{ width: "100%", accentColor: color }} />
-    </div>
-  );
-  const stepBtn = { width: 40, height: 36, border: `0.5px solid ${C.line}`, background: "#fff", borderRadius: 8, fontSize: 18, cursor: "pointer", color: C.body };
+  function addActivity(name) {
+    if (!name) return;
+    if (activities.some((a) => a.name.toLowerCase() === name.toLowerCase())) return;
+    setActivities([...activities, { name, reliance: 1, timeBand: 2 }]);
+    setSaved(false);
+  }
+  function updateActivity(i, patch) {
+    setActivities(activities.map((a, j) => (j === i ? { ...a, ...patch } : a)));
+    setSaved(false);
+  }
+  function removeActivity(i) { setActivities(activities.filter((_, j) => j !== i)); setSaved(false); }
+
+  const used = new Set(activities.map((a) => a.name));
+  const remaining = DEFAULT_ACTIVITIES.filter((n) => !used.has(n));
 
   return (
     <div style={card}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-        <div style={{ fontFamily: SERIF, fontSize: 18, fontWeight: 600, color: C.ink }}>{existing ? "Today's log" : "Log today"}</div>
-        {share !== null && <span style={{ fontSize: 12, color: C.mintDeep, fontWeight: 600 }}>{share}% independent</span>}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+        <div style={{ fontFamily: SERIF, fontSize: 18, fontWeight: 600, color: C.ink }}>{existing ? "Today's activities" : "Log today"}</div>
+        {indep !== null && <span style={{ fontSize: 12, color: C.mintDeep, fontWeight: 600 }}>{indep}% your own work</span>}
       </div>
-      {slider("Time using AI tools", aiMinutes, setAi, C.apricot)}
-      {slider("Independent study time", independentMinutes, setInd, C.mint)}
-      <div style={{ marginBottom: 16 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-          <span style={{ fontSize: 14, color: C.body }}>Tasks completed without AI</span>
-          <span style={{ fontFamily: SERIF, fontSize: 15, fontWeight: 600, color: C.mint }}>{independentTasks}</span>
-        </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <button onClick={() => { setTasks(Math.max(0, independentTasks - 1)); setSaved(false); }} style={stepBtn}>–</button>
-          <button onClick={() => { setTasks(independentTasks + 1); setSaved(false); }} style={stepBtn}>+</button>
-        </div>
+      <p style={{ fontSize: 12, color: C.hint, marginTop: 0, marginBottom: 14 }}>Add what you worked on, then set how much was your own work and how long it took.</p>
+
+      {/* activity chips to add */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
+        {remaining.map((n) => (
+          <button key={n} onClick={() => addActivity(n)} style={{ padding: "7px 12px", borderRadius: 20, border: `0.5px solid ${C.line}`, background: "#fff", color: C.body, fontSize: 13, cursor: "pointer", fontFamily: SANS }}>+ {n}</button>
+        ))}
       </div>
+
+      {/* add custom */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 18 }}>
+        <input value={customName} onChange={(e) => setCustomName(e.target.value)} placeholder="Add your own activity…" style={{ ...input, flex: 1 }} />
+        <button onClick={() => { addActivity(customName.trim()); setCustomName(""); }} disabled={!customName.trim()} style={{ padding: "0 16px", borderRadius: 9, border: "none", background: customName.trim() ? C.mintDeep : C.lineSoft, color: customName.trim() ? "#fff" : C.hint, fontSize: 14, fontWeight: 600, cursor: customName.trim() ? "pointer" : "default", fontFamily: SANS }}>Add</button>
+      </div>
+
+      {/* logged activities */}
+      {activities.length === 0 && <p style={{ fontSize: 13, color: C.hint, textAlign: "center", padding: "8px 0 16px" }}>No activities yet — add one above.</p>}
+      <div style={{ display: "flex", flexDirection: "column", gap: 14, marginBottom: activities.length ? 18 : 0 }}>
+        {activities.map((a, i) => {
+          const aiPct = 100 - relianceToIndependence(a.reliance);
+          return (
+            <div key={a.name + i} style={{ border: `0.5px solid ${C.line}`, borderRadius: 12, padding: "12px 14px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                <span style={{ fontSize: 14, fontWeight: 600, color: C.ink }}>{a.name}</span>
+                <button onClick={() => removeActivity(i)} aria-label="Remove" style={{ background: "none", border: "none", color: C.hint, cursor: "pointer", fontSize: 16 }}>×</button>
+              </div>
+              {/* reliance */}
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                <span style={{ fontSize: 12, color: C.body }}>How much was your own work?</span>
+                <span style={{ fontSize: 12, fontWeight: 600, color: aiPct > 50 ? C.apricotInk : C.mintDeep }}>{RELIANCE_LEVELS[a.reliance - 1]}</span>
+              </div>
+              <input type="range" min={1} max={7} step={1} value={a.reliance} onChange={(e) => updateActivity(i, { reliance: Number(e.target.value) })} style={{ width: "100%", accentColor: aiPct > 50 ? C.apricot : C.mint, marginBottom: 12 }} />
+              {/* time band */}
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                <span style={{ fontSize: 12, color: C.body }}>Roughly how long?</span>
+                <span style={{ fontSize: 12, fontWeight: 600, color: C.faint }}>{TIME_BANDS[a.timeBand]}</span>
+              </div>
+              <input type="range" min={0} max={6} step={1} value={a.timeBand} onChange={(e) => updateActivity(i, { timeBand: Number(e.target.value) })} style={{ width: "100%", accentColor: C.faint }} />
+            </div>
+          );
+        })}
+      </div>
+
       <label style={{ fontSize: 14, color: C.body, display: "block", marginBottom: 6 }}>A note to yourself <span style={{ color: C.hint, fontSize: 12 }}>(+{POINTS.reflection.points} pts, min {POINTS.reflection.minWords} words)</span></label>
       <textarea value={reflection} onChange={(e) => { setRefl(e.target.value); setSaved(false); }}
         placeholder="When did AI help today, and when might you have leaned on it too quickly?"
-        style={{ width: "100%", minHeight: 64, padding: 11, border: `1px solid ${C.line}`, borderRadius: 9, fontSize: 13, fontFamily: SANS, resize: "vertical", boxSizing: "border-box", marginBottom: 14, color: C.ink, fontStyle: reflection ? "normal" : "italic" }} />
+        style={{ width: "100%", minHeight: 64, padding: 11, border: `1px solid ${C.line}`, borderRadius: 9, fontSize: 13, fontFamily: SANS, resize: "vertical", boxSizing: "border-box", marginBottom: 14, color: C.ink }} />
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span style={{ fontSize: 12, color: C.hint }}>This entry: <span style={{ color: C.mintDeep, fontWeight: 600 }}>{base + bonus} pts</span>{bonus > 0 && <span> ({base} + {bonus} streak)</span>}</span>
-        <button onClick={() => { onSave(draft); setSaved(true); }} style={{ padding: "10px 20px", background: C.mintDeep, color: "#fff", border: "none", borderRadius: 9, fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: SANS }}>{saved ? "Saved ✓" : existing ? "Update today" : "Save today"}</button>
+        <button onClick={() => { onSave(draft); setSaved(true); }} disabled={activities.length === 0}
+          style={{ padding: "10px 20px", background: activities.length ? C.mintDeep : C.lineSoft, color: activities.length ? "#fff" : C.hint, border: "none", borderRadius: 9, fontSize: 14, fontWeight: 600, cursor: activities.length ? "pointer" : "default", fontFamily: SANS }}>
+          {saved ? "Saved ✓" : existing ? "Update today" : "Save today"}
+        </button>
       </div>
     </div>
   );

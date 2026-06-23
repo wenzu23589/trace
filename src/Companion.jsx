@@ -98,38 +98,35 @@ export default function Companion({ variant = "sage", mood = "content", size = 1
 }
 
 // ── Mood engine ────────────────────────────────────────────────────────────
-// Mood is driven by RECENT independent effort and presence — never by AI use.
-// Tunable thresholds; tweak freely.
+// Mood is driven by RECENT independence & activity — never by AI use.
+import { dayIndependence, dayEffort } from "./activities.js";
+
 export const MOOD_CONFIG = {
-  // look back this many days for "recent" effort
   windowDays: 3,
-  // independent minutes over the window:
-  thriving: 150,  // >= this → thriving
-  happy: 80,      // >= this → happy
-  content: 20,    // >= this → content
-  // below `content` but logged within windowDays → still content
-  // no logging within windowDays → sleepy
-  // logged recently but independent effort near zero → drained
-  drainedMaxIndependent: 10, // logged but <= this much independent → drained
+  thrivingIndep: 70,   // avg independence over window >= this + active → thriving
+  happyIndep: 50,
+  drainedIndep: 30,    // logged but avg independence below this → drained
 };
 
 export function moodFromEntries(entries) {
   const cfg = MOOD_CONFIG;
   const today = new Date();
-  let recentIndependent = 0;
-  let loggedRecently = false;
+  let loggedRecently = false, indepSum = 0, indepDays = 0, effort = 0;
   for (let i = 0; i < cfg.windowDays; i++) {
     const d = new Date(today); d.setDate(d.getDate() - i);
     const k = d.toISOString().slice(0, 10);
     const e = entries[k];
-    if (e) {
+    if (e && e.activities && e.activities.length) {
       loggedRecently = true;
-      recentIndependent += e.independentMinutes || 0;
+      const ind = dayIndependence(e.activities);
+      if (ind !== null) { indepSum += ind; indepDays++; }
+      effort += dayEffort(e.activities);
     }
   }
-  if (!loggedRecently) return "sleepy";
-  if (recentIndependent <= cfg.drainedMaxIndependent) return "drained";
-  if (recentIndependent >= cfg.thriving) return "thriving";
-  if (recentIndependent >= cfg.happy) return "happy";
+  if (!loggedRecently || indepDays === 0) return "sleepy";
+  const avgIndep = indepSum / indepDays;
+  if (avgIndep < cfg.drainedIndep) return "drained";
+  if (avgIndep >= cfg.thrivingIndep) return "thriving";
+  if (avgIndep >= cfg.happyIndep) return "happy";
   return "content";
 }

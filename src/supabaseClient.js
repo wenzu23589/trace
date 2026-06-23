@@ -126,9 +126,8 @@ export async function fetchEntries(userId) {
   const map = {};
   (data || []).forEach((row) => {
     map[row.entry_date] = {
-      aiMinutes: row.ai_minutes,
-      independentMinutes: row.independent_minutes,
-      independentTasks: row.independent_tasks,
+      activities: row.activities || [],
+      independence: row.independence,
       reflection: row.reflection || "",
       points: row.points,
     };
@@ -141,9 +140,8 @@ export async function saveEntry(userId, dateKey, entry) {
     {
       user_id: userId,
       entry_date: dateKey,
-      ai_minutes: entry.aiMinutes,
-      independent_minutes: entry.independentMinutes,
-      independent_tasks: entry.independentTasks,
+      activities: entry.activities || [],
+      independence: entry.independence ?? null,
       reflection: entry.reflection,
       points: entry.points,
       updated_at: new Date().toISOString(),

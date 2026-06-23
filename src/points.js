@@ -1,29 +1,23 @@
 // ════════════════════════════════════════════════════════════════════════
-// TRACE points system — single tunable config.
-// Principle: reward independent effort and reflection; never score AI use
-// (up or down). All thresholds live here so they can be adjusted without
-// touching app logic.
+// TRACE points system v8 — derives from per-activity logging.
+// Principle unchanged: reward independent effort + reflection; AI use is
+// never punished, it simply scores lower than independent work.
 // ════════════════════════════════════════════════════════════════════════
+import { dayIndependence, dayEffort } from "./activities.js";
 
 export const POINTS = {
-  // Independent study: 1 pt per N minutes, capped per day.
-  independent: { minutesPerPoint: 3, dailyCap: 60 },     // 60 pts = 180 min
-  // Tasks done without AI: flat pts each, capped count per day.
-  tasks:       { perTask: 10, maxPerDay: 3 },            // up to 30
-  // Reflection: flat pts once a day, requires a minimum length.
-  reflection:  { points: 15, minWords: 20 },             // 15
+  // Independence points: up to this many, scaled by the day's independence %.
+  independenceMax: 60,
+  // A small bonus per logged activity (engagement), capped — never the main driver.
+  perActivity: 3, activityCap: 15,
+  // Reflection: flat pts once a day, minimum length.
+  reflection: { points: 15, minWords: 20 },
   // Streak: bonus per consecutive logged day, capped.
-  streak:      { perDay: 2, cap: 20 },                   // up to 20
-  // AI use is never scored. Listed for clarity; value is always 0.
-  ai:          { points: 0 },
+  streak: { perDay: 2, cap: 20 },
 };
 
-// Max earnable in a single day (used for UI hints): 60 + 30 + 15 + 20 = 125.
 export const DAILY_MAX =
-  POINTS.independent.dailyCap +
-  POINTS.tasks.perTask * POINTS.tasks.maxPerDay +
-  POINTS.reflection.points +
-  POINTS.streak.cap;
+  POINTS.independenceMax + POINTS.activityCap + POINTS.reflection.points + POINTS.streak.cap; // 110
 
 export const MILESTONES = [
   { at: 100,  label: "First steps" },
@@ -38,37 +32,24 @@ function countWords(s) {
   return s.trim().split(/\s+/).filter(Boolean).length;
 }
 
-// Points for a single day's entry, EXCLUDING the streak bonus (streak depends
-// on history, so it's added separately in the daily total below).
+// Base points for a day (excludes streak bonus, which depends on history).
 export function basePointsForEntry(e) {
-  const ind = Math.min(
-    POINTS.independent.dailyCap,
-    Math.floor((e.independentMinutes || 0) / POINTS.independent.minutesPerPoint)
-  );
-  const tasks = Math.min(POINTS.tasks.maxPerDay, Math.max(0, e.independentTasks || 0)) * POINTS.tasks.perTask;
-  const refl = countWords(e.reflection) >= POINTS.reflection.minWords ? POINTS.reflection.points : 0;
-  return ind + tasks + refl;
+  const indep = dayIndependence(e.activities); // 0..100 or null
+  const indepPts = indep === null ? 0 : Math.round((indep / 100) * POINTS.independenceMax);
+  const actPts = Math.min(POINTS.activityCap, (e.activities?.length || 0) * POINTS.perActivity);
+  const reflPts = countWords(e.reflection) >= POINTS.reflection.minWords ? POINTS.reflection.points : 0;
+  return indepPts + actPts + reflPts;
 }
 
 export function streakBonus(streakDays) {
   return Math.min(POINTS.streak.cap, Math.max(0, streakDays) * POINTS.streak.perDay);
 }
 
-// Full points stored for an entry = base + that day's streak bonus.
 export function pointsForEntry(e, streakDays) {
   return basePointsForEntry(e) + streakBonus(streakDays);
 }
 
-// Independent share of logged time, 0–100, or null if nothing logged.
-export function independentShare(e) {
-  const total = (e.independentMinutes || 0) + (e.aiMinutes || 0);
-  if (total === 0) return null;
-  return Math.round(((e.independentMinutes || 0) / total) * 100);
-}
-
-// ── Streak helpers (v5) ────────────────────────────────────────────────────
-// Generic consecutive-day counter ending today (or yesterday if today's not
-// logged yet). `qualifies(entry)` decides whether a given day counts.
+// ── Streaks (v5) — generic consecutive-day counter ───────────────────────
 export function streakOf(entries, qualifies) {
   const todayK = new Date().toISOString().slice(0, 10);
   let cursor = todayK;
@@ -86,7 +67,7 @@ export function streakOf(entries, qualifies) {
 }
 
 export const STREAKS = {
-  logging:     { label: "Logging",     icon: "ti-flame",   test: () => true },
-  independent: { label: "Independent", icon: "ti-book",    test: (e) => (e.independentMinutes || 0) > 0 },
-  reflection:  { label: "Reflection",  icon: "ti-pencil",  test: (e) => (e.reflection || "").trim().split(/\s+/).filter(Boolean).length >= POINTS.reflection.minWords },
+  logging:     { label: "Logging",     icon: "ti-flame",  test: () => true },
+  independent: { label: "Independent", icon: "ti-book",   test: (e) => (dayIndependence(e.activities) ?? 0) >= 50 },
+  reflection:  { label: "Reflection",  icon: "ti-pencil", test: (e) => countWords(e.reflection) >= POINTS.reflection.minWords },
 };
