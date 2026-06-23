@@ -1,39 +1,57 @@
-# TRACE v6 — avatars + full affiliation names in community
+# TRACE v7 — companion + fresh background
 
-Two changes, both small to deploy.
+Adds a virtual companion that responds to independent effort, and replaces the
+warm/brown background with a cooler tone.
 
 ## What changed
 
-**Colourful avatars (no uploads, no personal data)**
-- Each person now has a deterministic avatar generated from their alias:
-  their initials on a colour picked by hashing the alias, with a soft accent.
-  Same alias always produces the same avatar.
-- Shown in the header (your own, highlighted) and beside every community row.
-- No photos, no uploads, nothing to host or moderate — so no new personal
-  data and no GDPR/biometric exposure.
+**A companion (Tamagotchi-style, but supportive)**
+- At sign-up, students pick one of three companions (colourways: Sage, Tide, Clay).
+- It sits at the top of the Track tab with a gentle idle animation (breathing,
+  blinking; a little hop when thriving).
+- Five moods, driven ONLY by recent independent effort and presence — never by
+  AI use:
+  - Thriving — lots of recent independent study
+  - Happy — steady independent work
+  - Content — ticking along
+  - Sleepy — no logging in the last few days (gentle "wake me" nudge)
+  - Drained — logging but very little independent effort (a nudge to do some
+    work of your own; perks back up as soon as you do)
+- AI use never lowers the mood. This keeps the companion a positive mascot for
+  the student's own effort, consistent with the points system and your study's
+  wellbeing aims.
 
-**Community shows the specific affiliation**
-- Small-group masking is removed: the community now always shows the full
-  entity name (e.g. "Faculty of Engineering", "Institute of Digital Games")
-  instead of just the type. This is why it previously showed only "Faculty"
-  while you were testing with one or two accounts.
+**Fresh background** — the bone/brown is replaced with a calm cool-mist tone.
 
-## Deploying v6
+## Placeholder art (important)
 
-1. **Supabase → SQL Editor** → paste `supabase_migration_v6.sql` → Run.
-   It only redefines the community view; no tables or data are touched.
-2. **Push the updated files** (GitHub Desktop → commit → push). A new file,
-   `src/Avatar.jsx`, is included — make sure it lands inside `src/` alongside
-   TRACE.jsx and points.js.
+The companion is drawn as simple built-in SVG as a PLACEHOLDER. It's wired so
+proper character art can be dropped in later without touching app logic — see
+the ART-SWAP NOTE at the top of `src/Companion.jsx`. When you have commissioned,
+licensed, or generated artwork (one image per variant × mood, or per variant
+with CSS for moods), swap the `Shape` component for an `<img>` and everything
+else — the picker, the five moods, the animation hooks — keeps working.
+
+## Tuning the moods
+
+All thresholds are in `MOOD_CONFIG` in `src/Companion.jsx` (how many days count
+as "recent", and the independent-minutes cutoffs for each mood). Adjust freely.
+
+## Deploying v7
+
+1. **Supabase → SQL Editor** → paste `supabase_migration_v7.sql` → Run.
+   (Additive: adds a `companion` column to profiles, defaulting to 'sage'.
+   No data touched.)
+2. **Push the updated files** (GitHub Desktop → commit → push). New file:
+   `src/Companion.jsx` — make sure it lands inside `src/`.
 3. Hard-refresh `trace.lfcstudies.com`.
 
-## Important research / privacy note
+Existing accounts (created before v7) default to the Sage companion; new
+sign-ups choose their own.
 
-You chose to REMOVE small-group masking. That means a participant who is the
-only person from a small entity is now shown by their specific affiliation,
-which — combined with their alias — can effectively identify them. That's fine
-for testing. **Before the real pilot, strongly consider re-enabling masking**
-(the one-line change is kept as a comment at the bottom of
-`supabase_migration_v6.sql`), or note the re-identification risk explicitly in
-your ethics submission. Showing the specific entity for tiny groups is a
-deliberate reversal of a privacy safeguard, so it should be a documented choice.
+## Research note
+
+The companion is an additional motivational layer. As with the points and
+community features, it's part of the intervention — worth noting in your ethics
+submission that the app shows a responsive companion driven by the student's
+independent-study activity (and explicitly NOT by their AI use, by design).

@@ -106,11 +106,11 @@ export async function getProfile(userId) {
   return data;
 }
 
-export async function createProfile({ userId, alias, affiliationType, affiliation, participantId, consented }) {
+export async function createProfile({ userId, alias, affiliationType, affiliation, participantId, consented, companion }) {
   const { data, error } = await supabase
     .from("profiles")
     .upsert(
-      { id: userId, alias, affiliation_type: affiliationType, affiliation, participant_id: participantId, consented },
+      { id: userId, alias, affiliation_type: affiliationType, affiliation, participant_id: participantId, consented, companion },
       { onConflict: "id" }
     )
     .select()

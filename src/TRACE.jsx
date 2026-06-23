@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from "react";
 import Avatar from "./Avatar.jsx";
+import Companion, { COMPANION_VARIANTS, moodFromEntries, MOODS } from "./Companion.jsx";
 import {
   supabaseConfigured, AFFILIATIONS, AFFILIATION_TYPES,
   signUp, signIn, signOut, getSession, onAuthChange,
@@ -12,7 +13,7 @@ import { POINTS, DAILY_MAX, MILESTONES, basePointsForEntry, streakBonus, pointsF
 
 // ── Fresh palette: mint-sage + apricot on bone ───────────────────────────
 const C = {
-  bone: "#FAF8F3", surface: "#ffffff", line: "#ece7da", lineSoft: "#f0ece2",
+  bone: "#EFF3F2", surface: "#ffffff", line: "#dde4e1", lineSoft: "#e7edeb",
   ink: "#2f4a3e", body: "#4a5a52",
   mint: "#5FB58C", mintDeep: "#3f8f68", mintSoft: "#e4f2ea", mintBar: "#7FC9A4",
   apricot: "#EC9268", apricotSoft: "#F4B892", apricotBg: "#f7e0d3", apricotInk: "#c0764a",
@@ -171,6 +172,24 @@ export default function TRACE() {
 
       {tab === "track" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          {/* companion */}
+          {(() => {
+            const mood = moodFromEntries(entries);
+            return (
+              <div style={{ ...card, display: "flex", flexDirection: "column", alignItems: "center", paddingTop: "1.5rem", paddingBottom: "1.5rem" }}>
+                <Companion variant={profile.companion || "sage"} mood={mood} size={120} />
+                <div style={{ fontFamily: SERIF, fontSize: 17, fontWeight: 600, color: C.ink, marginTop: 8 }}>{MOODS[mood].label}</div>
+                <div style={{ fontSize: 12, color: C.faint, marginTop: 2, textAlign: "center", maxWidth: 300 }}>
+                  {mood === "thriving" && "Thriving on your independent effort — keep it up."}
+                  {mood === "happy" && "Happy with your steady, independent work."}
+                  {mood === "content" && "Ticking along. A little independent study lifts the mood."}
+                  {mood === "sleepy" && "Resting — log a day to wake your companion."}
+                  {mood === "drained" && "A bit drained. Some independent work will perk it back up."}
+                </div>
+              </div>
+            );
+          })()}
+
           {/* prominent streaks */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
             {["logging", "independent", "reflection"].map((key) => {
@@ -279,9 +298,10 @@ function ProfileScreen({ userId, onDone }) {
   const [alias, setAlias] = useState(""); const [affType, setAffType] = useState("");
   const [affiliation, setAffiliation] = useState(""); const [participantId, setParticipantId] = useState("");
   const [consent, setConsent] = useState(false); const [busy, setBusy] = useState(false); const [msg, setMsg] = useState("");
+  const [companion, setCompanion] = useState("sage");
   async function submit() {
     setBusy(true); setMsg("");
-    try { const p = await createProfile({ userId, alias: alias.trim(), affiliationType: affType, affiliation, participantId: participantId.trim(), consented: consent }); onDone(p); }
+    try { const p = await createProfile({ userId, alias: alias.trim(), affiliationType: affType, affiliation, participantId: participantId.trim(), consented: consent, companion }); onDone(p); }
     catch (err) { setMsg(err.message || "Could not save profile."); setBusy(false); }
   }
   const ok = alias.trim() && affType && affiliation && consent && !busy;
@@ -308,6 +328,16 @@ function ProfileScreen({ userId, onDone }) {
       )}
       <label style={{ ...lbl, display: "block", marginBottom: 6 }}>Participant ID (optional)</label>
       <input value={participantId} onChange={(e) => setParticipantId(e.target.value)} placeholder="study code, if you were given one" style={{ ...input, marginBottom: 16 }} />
+      <label style={{ ...lbl, display: "block", marginBottom: 8 }}>Choose your companion</label>
+      <div style={{ display: "flex", gap: 10, marginBottom: 18 }}>
+        {COMPANION_VARIANTS.map((v) => (
+          <button key={v.id} onClick={() => setCompanion(v.id)} type="button"
+            style={{ flex: 1, padding: "10px 4px", borderRadius: 12, cursor: "pointer", background: companion === v.id ? "#eef6f1" : "#fff", border: `1.5px solid ${companion === v.id ? C.mintBar : C.line}`, display: "flex", flexDirection: "column", alignItems: "center", gap: 4, fontFamily: SANS }}>
+            <Companion variant={v.id} mood="happy" size={56} />
+            <span style={{ fontSize: 12, color: C.body }}>{v.label}</span>
+          </button>
+        ))}
+      </div>
       <label style={{ display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 18, fontSize: 13, color: C.body, lineHeight: 1.45 }}>
         <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} style={{ marginTop: 3 }} />
         <span>I agree to take part in the EASE study and understand my logged data will be used for research. My AI-use figures are never shown to other students.</span>
