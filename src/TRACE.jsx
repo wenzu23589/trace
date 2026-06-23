@@ -8,6 +8,7 @@ import {
   fetchEntries, saveEntry,
   fetchCommunity, fetchCompetitions, createCompetition, joinCompetition, fetchMyCompetitions,
   fetchAdminChallenges, createAdminChallenge, deleteAdminChallenge,
+  fetchNotifications, markNotificationsRead, createNotification, fetchAllNotifications, deleteNotification,
 } from "./supabaseClient.js";
 import { POINTS, DAILY_MAX, MILESTONES, basePointsForEntry, streakBonus, pointsForEntry, streakOf, STREAKS } from "./points.js";
 import { DEFAULT_ACTIVITIES, RELIANCE_LEVELS, TIME_BANDS, relianceToIndependence, dayIndependence, relianceByActivityType, independenceSeries, weeklyAverages, adaptivePrompt } from "./activities.js";
@@ -83,6 +84,47 @@ function BalanceBars({ entries }) {
         </div>
         {avg !== null && <div style={{ fontSize: 12, color: C.faint }}>Week average <span style={{ fontWeight: 600, color: C.mintDeep }}>{avg}% your own</span></div>}
       </div>
+    </div>
+  );
+}
+
+// ── Notification bell (v10) ───────────────────────────────────────────────
+function Bell({ userId, affiliation }) {
+  const [notes, setNotes] = useState([]);
+  const [open, setOpen] = useState(false);
+  async function load() {
+    try { setNotes(await fetchNotifications(userId, affiliation)); } catch (e) { console.error(e); }
+  }
+  useEffect(() => { load(); const t = setInterval(load, 60000); return () => clearInterval(t); /* eslint-disable-next-line */ }, []);
+  const unread = notes.filter((n) => !n.read);
+  async function toggle() {
+    const next = !open; setOpen(next);
+    if (next && unread.length) {
+      try { await markNotificationsRead(userId, unread.map((n) => n.id)); setNotes(notes.map((n) => ({ ...n, read: true }))); } catch (e) { console.error(e); }
+    }
+  }
+  function fmt(ts) { const d = new Date(ts); return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }); }
+  return (
+    <div style={{ position: "relative" }}>
+      <button onClick={toggle} aria-label="Notifications" style={{ position: "relative", background: "none", border: "none", cursor: "pointer", color: C.faint, fontSize: 22, lineHeight: 1, padding: 4 }}>
+        <i className="ti ti-bell" aria-hidden="true" />
+        {unread.length > 0 && (
+          <span style={{ position: "absolute", top: 0, right: 0, minWidth: 16, height: 16, padding: "0 4px", background: C.apricotInk, color: "#fff", borderRadius: 8, fontSize: 10, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: SANS }}>{unread.length}</span>
+        )}
+      </button>
+      {open && (
+        <div style={{ position: "absolute", right: 0, top: 38, width: 300, maxHeight: 360, overflowY: "auto", background: "#fff", border: `0.5px solid ${C.line}`, borderRadius: 12, boxShadow: "0 8px 28px rgba(0,0,0,0.12)", zIndex: 50, padding: 8 }}>
+          <div style={{ fontSize: 12, color: C.hint, padding: "6px 10px 10px" }}>Notifications</div>
+          {notes.length === 0 && <div style={{ fontSize: 13, color: C.hint, padding: "8px 10px 14px" }}>Nothing yet.</div>}
+          {notes.map((n) => (
+            <div key={n.id} style={{ padding: "10px 10px", borderTop: `0.5px solid ${C.lineSoft}` }}>
+              <div style={{ fontSize: 13.5, fontWeight: 600, color: C.ink }}>{n.title}</div>
+              <div style={{ fontSize: 12.5, color: C.body, lineHeight: 1.45, marginTop: 2 }}>{n.body}</div>
+              <div style={{ fontSize: 10.5, color: C.hint, marginTop: 4 }}>{fmt(n.created_at)}</div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -244,9 +286,12 @@ export default function TRACE() {
             <div style={{ fontSize: 13, color: C.faint, marginTop: 2 }}>{profile.affiliation}{stats.streak > 0 ? ` · day ${stats.streak} of your streak` : ""}</div>
           </div>
         </div>
-        <div style={{ textAlign: "right" }}>
-          <div style={{ fontFamily: SERIF, fontSize: 30, fontWeight: 600, color: C.mintDeep }}>{stats.totalPoints}</div>
-          <div style={lbl}>points</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+          <Bell userId={session.user.id} affiliation={profile.affiliation} />
+          <div style={{ textAlign: "right" }}>
+            <div style={{ fontFamily: SERIF, fontSize: 30, fontWeight: 600, color: C.mintDeep }}>{stats.totalPoints}</div>
+            <div style={lbl}>points</div>
+          </div>
         </div>
       </div>
 
@@ -679,6 +724,23 @@ function AdminPanel({ userId }) {
     } catch (e) { setErr(e.message || "Could not publish."); } finally { setBusy(false); }
   }
   async function remove(id) { try { await deleteAdminChallenge(id); await load(); } catch { setErr("Could not delete."); } }
+
+  // notifications (v10)
+  const [notes, setNotes] = useState(null);
+  const [nTitle, setNTitle] = useState(""); const [nBody, setNBody] = useState("");
+  const [nTarget, setNTarget] = useState(""); const [nType, setNType] = useState(AFFILIATION_TYPES[0]);
+  const [nBusy, setNBusy] = useState(false);
+  async function loadNotes() { try { setNotes(await fetchAllNotifications()); } catch (e) { console.error(e); } }
+  useEffect(() => { loadNotes(); /* eslint-disable-next-line */ }, []);
+  async function sendNote() {
+    if (!nTitle.trim() || !nBody.trim()) return; setNBusy(true);
+    try {
+      await createNotification({ title: nTitle.trim(), body: nBody.trim(), targetAffiliation: nTarget || null, userId });
+      setNTitle(""); setNBody(""); setNTarget(""); await loadNotes();
+    } catch (e) { setErr(e.message || "Could not send."); } finally { setNBusy(false); }
+  }
+  async function removeNote(id) { try { await deleteNotification(id); await loadNotes(); } catch { setErr("Could not delete notification."); } }
+
   if (err) return <div style={card}><p style={{ color: C.apricotInk, fontSize: 14 }}>{err}</p></div>;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -712,6 +774,49 @@ function AdminPanel({ userId }) {
               </div>
             ))}
             {challenges.length === 0 && <p style={{ fontSize: 13, color: C.hint }}>No challenges published yet.</p>}
+          </div>
+        )}
+      </div>
+
+      <div style={card}>
+        <div style={{ fontFamily: SERIF, fontSize: 18, fontWeight: 600, color: C.ink, marginBottom: 2 }}>Send a notification</div>
+        <p style={{ fontSize: 12, color: C.hint, marginTop: 0, marginBottom: 14 }}>Appears in the bell for students. Leave the target as “Everyone” to broadcast.</p>
+        <input value={nTitle} onChange={(e) => setNTitle(e.target.value)} placeholder="Notification title" style={{ ...input, marginBottom: 10 }} />
+        <textarea value={nBody} onChange={(e) => setNBody(e.target.value)} placeholder="Message" style={{ ...input, minHeight: 60, marginBottom: 10, resize: "vertical" }} />
+        <div style={{ display: "flex", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+          <select value={nTarget ? "targeted" : "all"} onChange={(e) => { if (e.target.value === "all") setNTarget(""); else setNTarget(AFFILIATIONS[nType][0]); }} style={{ ...input, width: "auto", flex: 1 }}>
+            <option value="all">Everyone</option>
+            <option value="targeted">A specific affiliation</option>
+          </select>
+          {nTarget && (
+            <>
+              <select value={nType} onChange={(e) => { setNType(e.target.value); setNTarget(AFFILIATIONS[e.target.value][0]); }} style={{ ...input, width: "auto", flex: 1 }}>
+                {AFFILIATION_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+              </select>
+              <select value={nTarget} onChange={(e) => setNTarget(e.target.value)} style={{ ...input, width: "100%" }}>
+                {AFFILIATIONS[nType].map((a) => <option key={a} value={a}>{a}</option>)}
+              </select>
+            </>
+          )}
+        </div>
+        <button onClick={sendNote} disabled={!nTitle.trim() || !nBody.trim() || nBusy} style={{ ...primaryBtn(!!nTitle.trim() && !!nBody.trim() && !nBusy), width: "auto", padding: "10px 20px" }}>{nBusy ? "Sending…" : nTarget ? "Send to affiliation" : "Send to everyone"}</button>
+      </div>
+
+      <div style={card}>
+        <div style={{ fontFamily: SERIF, fontSize: 18, fontWeight: 600, color: C.ink, marginBottom: 14 }}>Sent notifications</div>
+        {!notes ? <p style={{ fontSize: 13, color: C.hint }}>Loading…</p> : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {notes.map((n) => (
+              <div key={n.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: 12, borderRadius: 10, background: C.bone, border: `0.5px solid ${C.line}` }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: C.ink }}>{n.title}</div>
+                  <div style={{ fontSize: 12, color: C.body, lineHeight: 1.4 }}>{n.body}</div>
+                  <div style={{ fontSize: 11, color: C.hint, marginTop: 3 }}>{n.target_affiliation ? `→ ${n.target_affiliation}` : "→ Everyone"}</div>
+                </div>
+                <button onClick={() => removeNote(n.id)} style={{ padding: "8px 14px", borderRadius: 8, border: `0.5px solid ${C.line}`, background: "#fff", color: C.apricotInk, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: SANS }}>Delete</button>
+              </div>
+            ))}
+            {notes.length === 0 && <p style={{ fontSize: 13, color: C.hint }}>No notifications sent yet.</p>}
           </div>
         )}
       </div>

@@ -221,3 +221,48 @@ export async function deleteAdminChallenge(id) {
   const { error } = await supabase.from("admin_challenges").delete().eq("id", id);
   if (error) throw error;
 }
+
+// ── Notifications (v10) ────────────────────────────────────────────────────
+// Returns notifications visible to this user (broadcast OR matching their
+// affiliation), each annotated with `read` (bool). Newest first.
+export async function fetchNotifications(userId, affiliation) {
+  const { data: notes, error } = await supabase
+    .from("notifications")
+    .select("*")
+    .or(`target_affiliation.is.null,target_affiliation.eq.${affiliation}`)
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  const { data: reads } = await supabase
+    .from("notification_reads")
+    .select("notification_id")
+    .eq("user_id", userId);
+  const readSet = new Set((reads || []).map((r) => r.notification_id));
+  return (notes || []).map((n) => ({ ...n, read: readSet.has(n.id) }));
+}
+
+export async function markNotificationsRead(userId, ids) {
+  if (!ids || ids.length === 0) return;
+  const rows = ids.map((id) => ({ notification_id: id, user_id: userId }));
+  const { error } = await supabase.from("notification_reads").upsert(rows, { onConflict: "notification_id,user_id" });
+  if (error) throw error;
+}
+
+export async function createNotification({ title, body, targetAffiliation, userId }) {
+  const { data, error } = await supabase
+    .from("notifications")
+    .insert({ title, body, target_affiliation: targetAffiliation || null, created_by: userId })
+    .select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function fetchAllNotifications() {
+  const { data, error } = await supabase.from("notifications").select("*").order("created_at", { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function deleteNotification(id) {
+  const { error } = await supabase.from("notifications").delete().eq("id", id);
+  if (error) throw error;
+}
