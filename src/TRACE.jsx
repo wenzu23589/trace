@@ -10,7 +10,7 @@ import {
   fetchAdminChallenges, createAdminChallenge, deleteAdminChallenge,
 } from "./supabaseClient.js";
 import { POINTS, DAILY_MAX, MILESTONES, basePointsForEntry, streakBonus, pointsForEntry, streakOf, STREAKS } from "./points.js";
-import { DEFAULT_ACTIVITIES, RELIANCE_LEVELS, TIME_BANDS, relianceToIndependence, dayIndependence } from "./activities.js";
+import { DEFAULT_ACTIVITIES, RELIANCE_LEVELS, TIME_BANDS, relianceToIndependence, dayIndependence, relianceByActivityType, independenceSeries, weeklyAverages, adaptivePrompt } from "./activities.js";
 
 // ── Fresh palette: mint-sage + apricot on bone ───────────────────────────
 const C = {
@@ -83,6 +83,85 @@ function BalanceBars({ entries }) {
         </div>
         {avg !== null && <div style={{ fontSize: 12, color: C.faint }}>Week average <span style={{ fontWeight: 600, color: C.mintDeep }}>{avg}% your own</span></div>}
       </div>
+    </div>
+  );
+}
+
+// ── Insights: reliance by activity type + independence trend (v9) ─────────
+const WINDOWS = [["14d", "14 days", 14], ["30d", "30 days", 30], ["all", "All time", null]];
+
+function Insights({ entries }) {
+  const [win, setWin] = useState("30d");
+  const days = WINDOWS.find((w) => w[0] === win)[2];
+  const byType = useMemo(() => relianceByActivityType(entries, days), [entries, days]);
+  const weeks = useMemo(() => weeklyAverages(independenceSeries(entries, days)), [entries, days]);
+  const [hover, setHover] = useState(null);
+
+  const hasData = byType.length > 0;
+
+  return (
+    <div style={card}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+        <div style={{ fontFamily: SERIF, fontSize: 18, fontWeight: 600, color: C.ink }}>Your patterns</div>
+        <div style={{ display: "flex", gap: 4 }}>
+          {WINDOWS.map(([id, label]) => (
+            <button key={id} onClick={() => setWin(id)} style={{ fontSize: 11, padding: "4px 9px", borderRadius: 7, border: `0.5px solid ${win === id ? C.mintBar : C.line}`, background: win === id ? "#eef6f1" : "#fff", color: win === id ? C.mintDeep : C.hint, cursor: "pointer", fontFamily: SANS }}>{label}</button>
+          ))}
+        </div>
+      </div>
+
+      {!hasData ? (
+        <p style={{ fontSize: 13, color: C.hint, padding: "14px 0" }}>Log a few days to see how your independence varies by activity and over time.</p>
+      ) : (
+        <>
+          {/* by activity type */}
+          <div style={{ fontSize: 12, color: C.faint, margin: "14px 0 10px" }}>How independently you work, by activity</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
+            {byType.map((t) => (
+              <div key={t.name} style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <span style={{ fontSize: 12, color: C.body, width: 110, textAlign: "right", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.name}</span>
+                <div style={{ flex: 1, height: 14, borderRadius: 7, overflow: "hidden", background: C.lineSoft }}>
+                  <div style={{ width: `${t.independence}%`, height: "100%", background: t.independence >= 50 ? C.mintBar : C.apricotSoft }} />
+                </div>
+                <span style={{ fontSize: 12, fontWeight: 600, color: t.independence >= 50 ? C.mintDeep : C.apricotInk, width: 38, textAlign: "right" }}>{t.independence}%</span>
+              </div>
+            ))}
+          </div>
+
+          {/* trend */}
+          {weeks.length >= 2 && (
+            <>
+              <div style={{ fontSize: 12, color: C.faint, margin: "20px 0 10px" }}>Your independence over time <span style={{ color: C.hint }}>· weekly average, hover for days</span></div>
+              <Trend weeks={weeks} hover={hover} setHover={setHover} />
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function Trend({ weeks, hover, setHover }) {
+  const W = 300, H = 96, pad = 8;
+  const n = weeks.length;
+  const x = (i) => pad + (i * (W - 2 * pad)) / Math.max(1, n - 1);
+  const y = (v) => H - pad - (v / 100) * (H - 2 * pad);
+  const pts = weeks.map((w, i) => `${x(i)},${y(w.avg)}`).join(" ");
+  return (
+    <div style={{ position: "relative" }}>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block" }}>
+        <line x1={pad} y1={y(50)} x2={W - pad} y2={y(50)} stroke={C.line} strokeWidth="1" strokeDasharray="3 3" />
+        <polyline points={pts} fill="none" stroke={C.mintDeep} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+        {weeks.map((w, i) => (
+          <circle key={w.week} cx={x(i)} cy={y(w.avg)} r={hover === i ? 5 : 3.5} fill={C.mintDeep}
+            onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)} style={{ cursor: "pointer" }} />
+        ))}
+      </svg>
+      {hover !== null && (
+        <div style={{ fontSize: 11, color: C.body, marginTop: 6, textAlign: "center" }}>
+          Week avg <b style={{ color: C.mintDeep }}>{weeks[hover].avg}%</b> · days: {weeks[hover].days.map((d) => `${d.independence}%`).join(", ")}
+        </div>
+      )}
     </div>
   );
 }
@@ -232,6 +311,8 @@ export default function TRACE() {
           </div>
 
           <div style={card}><BalanceBars entries={entries} /></div>
+
+          <Insights entries={entries} />
 
           <DailyLog existing={today} streak={stats.streak}
             onSave={async (entry) => {
@@ -558,8 +639,17 @@ function DailyLog({ existing, streak, onSave }) {
       </div>
 
       <label style={{ fontSize: 14, color: C.body, display: "block", marginBottom: 6 }}>A note to yourself <span style={{ color: C.hint, fontSize: 12 }}>(+{POINTS.reflection.points} pts, min {POINTS.reflection.minWords} words)</span></label>
+      {(() => {
+        const hint = adaptivePrompt(activities);
+        return hint ? (
+          <div style={{ display: "flex", gap: 8, alignItems: "flex-start", background: "#eef6f1", border: `0.5px solid ${C.mintBar}`, borderRadius: 9, padding: "9px 12px", marginBottom: 8 }}>
+            <i className="ti ti-bulb" style={{ color: C.mintDeep, fontSize: 15, marginTop: 1 }} aria-hidden="true" />
+            <span style={{ fontSize: 12.5, color: C.body, lineHeight: 1.45, fontStyle: "italic" }}>{hint}</span>
+          </div>
+        ) : null;
+      })()}
       <textarea value={reflection} onChange={(e) => { setRefl(e.target.value); setSaved(false); }}
-        placeholder="When did AI help today, and when might you have leaned on it too quickly?"
+        placeholder="Write a few words reflecting on your day…"
         style={{ width: "100%", minHeight: 64, padding: 11, border: `1px solid ${C.line}`, borderRadius: 9, fontSize: 13, fontFamily: SANS, resize: "vertical", boxSizing: "border-box", marginBottom: 14, color: C.ink }} />
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span style={{ fontSize: 12, color: C.hint }}>This entry: <span style={{ color: C.mintDeep, fontWeight: 600 }}>{base + bonus} pts</span>{bonus > 0 && <span> ({base} + {bonus} streak)</span>}</span>

@@ -78,3 +78,74 @@ export function dayEffort(activities) {
   if (!activities) return 0;
   return activities.reduce((s, a) => s + bandWeight(a.timeBand ?? 0), 0);
 }
+
+// ── v9 insight helpers ─────────────────────────────────────────────────────
+
+// Average independence per activity-type name across a set of entries.
+// `entries` is the {dateKey: {activities,...}} map. Returns sorted array.
+export function relianceByActivityType(entries, sinceDays = null) {
+  const cutoff = sinceDays ? Date.now() - sinceDays * 864e5 : null;
+  const acc = {}; // name -> {wIndep, wSum, count}
+  for (const k of Object.keys(entries)) {
+    if (cutoff && new Date(k).getTime() < cutoff) continue;
+    const e = entries[k];
+    for (const a of e.activities || []) {
+      const w = bandWeight(a.timeBand ?? 0);
+      const ind = relianceToIndependence(a.reliance);
+      if (!acc[a.name]) acc[a.name] = { wIndep: 0, wSum: 0, count: 0 };
+      acc[a.name].wIndep += ind * w;
+      acc[a.name].wSum += w;
+      acc[a.name].count += 1;
+    }
+  }
+  return Object.entries(acc)
+    .map(([name, v]) => ({ name, independence: v.wSum ? Math.round(v.wIndep / v.wSum) : 0, count: v.count }))
+    .sort((a, b) => b.independence - a.independence);
+}
+
+// Daily independence series (for the trend), oldest → newest, within window.
+export function independenceSeries(entries, sinceDays = null) {
+  const cutoff = sinceDays ? Date.now() - sinceDays * 864e5 : null;
+  return Object.keys(entries)
+    .filter((k) => !cutoff || new Date(k).getTime() >= cutoff)
+    .sort()
+    .map((k) => ({ date: k, independence: dayIndependence(entries[k].activities) }))
+    .filter((d) => d.independence !== null);
+}
+
+// Group a daily series into ISO-week averages for a smoother line.
+export function weeklyAverages(series) {
+  const weeks = {};
+  for (const d of series) {
+    const dt = new Date(d.date);
+    const onejan = new Date(dt.getFullYear(), 0, 1);
+    const wk = Math.ceil((((dt - onejan) / 864e5) + onejan.getDay() + 1) / 7);
+    const key = `${dt.getFullYear()}-W${String(wk).padStart(2, "0")}`;
+    if (!weeks[key]) weeks[key] = { sum: 0, n: 0, days: [] };
+    weeks[key].sum += d.independence; weeks[key].n++; weeks[key].days.push(d);
+  }
+  return Object.entries(weeks).map(([week, v]) => ({ week, avg: Math.round(v.sum / v.n), days: v.days }));
+}
+
+// Adaptive reflection prompt from today's logged activities.
+export function adaptivePrompt(activities) {
+  if (!activities || activities.length === 0) return null;
+  const indep = dayIndependence(activities);
+  // find the activity leaned on most (lowest independence, weighted by time)
+  const ranked = [...activities].sort(
+    (a, b) => (relianceToIndependence(a.reliance) - relianceToIndependence(b.reliance))
+  );
+  const mostAI = ranked[0];
+  const mostOwn = ranked[ranked.length - 1];
+  const mostAIindep = relianceToIndependence(mostAI.reliance);
+  if (indep >= 70) {
+    return `You worked largely on your own today. What helped you stay independent — and could it carry over to other work?`;
+  }
+  if (mostAIindep <= 30 && mostOwn && relianceToIndependence(mostOwn.reliance) >= 60) {
+    return `You leaned on AI most for ${mostAI.name.toLowerCase()}, and worked independently on ${mostOwn.name.toLowerCase()}. What's one part of the ${mostAI.name.toLowerCase()} you could try yourself first next time?`;
+  }
+  if (mostAIindep <= 30) {
+    return `You leaned on AI quite a bit for ${mostAI.name.toLowerCase()} today. What drew you to it there — time, difficulty, or habit?`;
+  }
+  return `A fairly balanced day. Where did AI genuinely help your understanding, and where might it have done the thinking for you?`;
+}
