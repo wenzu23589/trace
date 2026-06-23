@@ -198,3 +198,28 @@ export async function fetchMyCompetitions(userId) {
   if (error) throw error;
   return new Set((data || []).map((r) => r.competition_id));
 }
+
+// ── Admin challenges (v5) ──────────────────────────────────────────────────
+export async function fetchAdminChallenges() {
+  const { data, error } = await supabase
+    .from("admin_challenges")
+    .select("*")
+    .order("ends_on", { ascending: true });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function createAdminChallenge({ title, description, metric, startsOn, endsOn, userId }) {
+  const { data, error } = await supabase
+    .from("admin_challenges")
+    .insert({ title, description, metric, starts_on: startsOn, ends_on: endsOn, created_by: userId })
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function deleteAdminChallenge(id) {
+  const { error } = await supabase.from("admin_challenges").delete().eq("id", id);
+  if (error) throw error;
+}

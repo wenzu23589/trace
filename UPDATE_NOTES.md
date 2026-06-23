@@ -1,49 +1,39 @@
-# TRACE v4 — redesign + points system
+# TRACE v6 — avatars + full affiliation names in community
 
-A visual and scoring overhaul. No database changes — same schema as v3, so
-this update is just files + push, no SQL to re-run.
+Two changes, both small to deploy.
 
 ## What changed
 
-**Look & feel**
-- New journal-style layout: a serif greeting, stat tiles, milestone progress,
-  the weekly chart, then the daily log.
-- Fresh light palette — mint-sage and soft apricot on a bone background.
-  The deep teals are gone.
-- Tabler icons added (loaded from CDN in index.html).
+**Colourful avatars (no uploads, no personal data)**
+- Each person now has a deterministic avatar generated from their alias:
+  their initials on a colour picked by hashing the alias, with a soft accent.
+  Same alias always produces the same avatar.
+- Shown in the header (your own, highlighted) and beside every community row.
+- No photos, no uploads, nothing to host or moderate — so no new personal
+  data and no GDPR/biometric exposure.
 
-**Weekly chart**
-- Replaced the paired vertical bars with horizontal "balance bars": one bar
-  per day split into independent (mint) vs AI (apricot), with the
-  **% independent** shown per day and a **week-average %** in the footer.
-- Days with nothing logged show "—" rather than a misleading 0%.
+**Community shows the specific affiliation**
+- Small-group masking is removed: the community now always shows the full
+  entity name (e.g. "Faculty of Engineering", "Institute of Digital Games")
+  instead of just the type. This is why it previously showed only "Faculty"
+  while you were testing with one or two accounts.
 
-**Points system (new, all tunable in `src/points.js`)**
-- Independent study: 1 pt per 3 min, capped at 60/day (180 min).
-- Tasks without AI: 10 pts each, up to 3/day (max 30).
-- Reflection: 15 pts/day, minimum 20 words.
-- Streak bonus: +2 per consecutive day, capped at +20.
-- AI use: never scored, up or down. Logged only.
-- Daily maximum: 125 pts.
-- Milestones: 100 / 300 / 700 / 1400 / 2500 pts.
-- The daily log now shows a live "this entry: N pts" estimate and the day's
-  % independent as you move the sliders.
+## Deploying v6
 
-To change any weight, cap, or milestone, edit `src/points.js` — it's one
-clearly-labelled config object. Note: changing the formula affects only
-NEW or re-saved entries; previously stored point totals are not recomputed.
+1. **Supabase → SQL Editor** → paste `supabase_migration_v6.sql` → Run.
+   It only redefines the community view; no tables or data are touched.
+2. **Push the updated files** (GitHub Desktop → commit → push). A new file,
+   `src/Avatar.jsx`, is included — make sure it lands inside `src/` alongside
+   TRACE.jsx and points.js.
+3. Hard-refresh `trace.lfcstudies.com`.
 
-## Deploying v4
+## Important research / privacy note
 
-1. Copy the updated files into your `trace` folder (overwrite).
-2. GitHub Desktop → commit → push. Same secrets, no new ones.
-3. Hard-refresh `trace.lfcstudies.com` (Ctrl+Shift+R).
-
-No Supabase SQL to run this time — the data model is unchanged.
-
-## Note for your protocol
-
-The points system rewards "study more, reflect more" and the community/
-competition features rank on it. As before, describe these as deliberate
-intervention design in your ethics submission. The daily cap is a wellbeing
-safeguard (it removes the incentive to over-report or grind) — worth keeping.
+You chose to REMOVE small-group masking. That means a participant who is the
+only person from a small entity is now shown by their specific affiliation,
+which — combined with their alias — can effectively identify them. That's fine
+for testing. **Before the real pilot, strongly consider re-enabling masking**
+(the one-line change is kept as a comment at the bottom of
+`supabase_migration_v6.sql`), or note the re-identification risk explicitly in
+your ethics submission. Showing the specific entity for tiny groups is a
+deliberate reversal of a privacy safeguard, so it should be a documented choice.

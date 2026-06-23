@@ -82,7 +82,10 @@ select
   p.id                                    as user_id,
   p.alias,
   p.affiliation_type,
-  case when ac.n >= 4 then p.affiliation else p.affiliation_type end as affiliation_display,
+  p.affiliation as affiliation_display,
+  -- Masking disabled at user request. To re-enable for the pilot, replace the
+  -- line above with:
+  --   case when ac.n >= 4 then p.affiliation else p.affiliation_type end as affiliation_display,
   coalesce(sum(e.independent_minutes), 0) as total_independent_minutes,
   coalesce(sum(e.points), 0)              as total_points,
   coalesce(sum(e.independent_minutes) filter (where e.entry_date >= current_date - 6), 0) as week_independent_minutes

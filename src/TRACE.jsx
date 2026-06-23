@@ -1,12 +1,14 @@
 import React, { useState, useEffect, useMemo } from "react";
+import Avatar from "./Avatar.jsx";
 import {
   supabaseConfigured, AFFILIATIONS, AFFILIATION_TYPES,
   signUp, signIn, signOut, getSession, onAuthChange,
   getProfile, createProfile,
   fetchEntries, saveEntry,
   fetchCommunity, fetchCompetitions, createCompetition, joinCompetition, fetchMyCompetitions,
+  fetchAdminChallenges, createAdminChallenge, deleteAdminChallenge,
 } from "./supabaseClient.js";
-import { POINTS, DAILY_MAX, MILESTONES, basePointsForEntry, streakBonus, pointsForEntry, independentShare } from "./points.js";
+import { POINTS, DAILY_MAX, MILESTONES, basePointsForEntry, streakBonus, pointsForEntry, independentShare, streakOf, STREAKS } from "./points.js";
 
 // ── Fresh palette: mint-sage + apricot on bone ───────────────────────────
 const C = {
@@ -124,7 +126,12 @@ export default function TRACE() {
     while (entries[cursor]) { streak++; const d = new Date(cursor); d.setDate(d.getDate() - 1); cursor = d.toISOString().slice(0, 10); }
     let weekIndependent = 0, aiToday = entries[todayKey()]?.aiMinutes || 0, tasksToday = entries[todayKey()]?.independentTasks || 0;
     keys.forEach((k) => { if (daysBetween(k, todayKey()) < 7) weekIndependent += entries[k].independentMinutes || 0; });
-    return { totalPoints, streak, weekIndependent, aiToday, tasksToday };
+    const streaks = {
+      logging: streakOf(entries, STREAKS.logging.test),
+      independent: streakOf(entries, STREAKS.independent.test),
+      reflection: streakOf(entries, STREAKS.reflection.test),
+    };
+    return { totalPoints, streak, weekIndependent, aiToday, tasksToday, streaks };
   }, [entries]);
 
   const next = MILESTONES.find((m) => m.at > stats.totalPoints) || null;
@@ -141,9 +148,12 @@ export default function TRACE() {
     <Shell>
       {/* header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", borderBottom: `0.5px solid ${C.line}`, paddingBottom: "1rem", marginBottom: "1.25rem" }}>
-        <div>
-          <div style={{ fontFamily: SERIF, fontSize: 22, fontWeight: 600, color: C.ink }}>{greeting}, {profile.alias}.</div>
-          <div style={{ fontSize: 13, color: C.faint, marginTop: 2 }}>{profile.affiliation}{stats.streak > 0 ? ` · day ${stats.streak} of your streak` : ""}</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <Avatar alias={profile.alias} size={42} highlight />
+          <div>
+            <div style={{ fontFamily: SERIF, fontSize: 22, fontWeight: 600, color: C.ink }}>{greeting}, {profile.alias}.</div>
+            <div style={{ fontSize: 13, color: C.faint, marginTop: 2 }}>{profile.affiliation}{stats.streak > 0 ? ` · day ${stats.streak} of your streak` : ""}</div>
+          </div>
         </div>
         <div style={{ textAlign: "right" }}>
           <div style={{ fontFamily: SERIF, fontSize: 30, fontWeight: 600, color: C.mintDeep }}>{stats.totalPoints}</div>
@@ -153,7 +163,7 @@ export default function TRACE() {
 
       {/* tabs */}
       <div style={{ display: "flex", gap: 6, marginBottom: 18 }}>
-        {[["track", "Track"], ["community", "Community"], ["compete", "Competitions"]].map(([id, t]) => (
+        {[["track", "Track"], ["community", "Community"], ["compete", "Competitions"], ...(profile.is_admin ? [["admin", "Admin"]] : [])].map(([id, t]) => (
           <button key={id} onClick={() => setTab(id)}
             style={{ padding: "8px 16px", borderRadius: 9, border: `0.5px solid ${tab === id ? C.mint : C.line}`, background: tab === id ? C.mint : "#fff", color: tab === id ? "#fff" : C.body, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: SANS }}>{t}</button>
         ))}
@@ -161,9 +171,22 @@ export default function TRACE() {
 
       {tab === "track" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          {/* stat tiles */}
+          {/* prominent streaks */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
+            {["logging", "independent", "reflection"].map((key) => {
+              const s = STREAKS[key]; const n = stats.streaks[key];
+              return (
+                <div key={key} style={{ background: n > 0 ? "#eef6f1" : "#fff", border: `0.5px solid ${n > 0 ? C.mintBar : C.line}`, borderRadius: 12, padding: "0.9rem 1rem", textAlign: "center" }}>
+                  <div style={{ fontSize: 22, color: n > 0 ? C.mint : C.hint }}><i className={`ti ${s.icon}`} aria-hidden="true" /></div>
+                  <div style={{ fontFamily: SERIF, fontSize: 26, fontWeight: 600, color: C.ink, lineHeight: 1.1 }}>{n}</div>
+                  <div style={{ fontSize: 11, color: C.faint }}>{s.label} streak</div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* metric tiles */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 12 }}>
-            <Tile icon="ti-flame" tint={C.amber} label="Streak" value={stats.streak} unit="days" />
             <Tile icon="ti-book" tint={C.mintDeep} label="Independent" value={stats.weekIndependent} unit="min/wk" />
             <Tile icon="ti-robot" tint={C.apricotInk} label="AI today" value={stats.aiToday} unit="min" />
             <Tile icon="ti-checkbox" tint={C.mintDeep} label="Tasks solo" value={stats.tasksToday} unit="" />
@@ -195,6 +218,7 @@ export default function TRACE() {
 
       {tab === "community" && <Community myId={session.user.id} />}
       {tab === "compete" && <Competitions userId={session.user.id} />}
+      {tab === "admin" && profile.is_admin && <AdminPanel userId={session.user.id} />}
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 18 }}>
         <span style={{ fontSize: 11, color: C.hint }}>EASE Study 2 · rule-based, no AI components</span>
@@ -310,14 +334,13 @@ function Community({ myId }) {
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {rows.map((r, i) => {
           const mine = r.user_id === myId;
-          const masked = r.affiliation_display && AFFILIATION_TYPES.includes(r.affiliation_display);
           return (
             <div key={r.user_id} style={{ display: "flex", alignItems: "center", gap: 14, padding: "11px 14px", borderRadius: 10, background: mine ? "#eef6f1" : "#fff", border: mine ? `1.5px solid ${C.mintBar}` : `0.5px solid ${C.line}` }}>
               <span style={{ fontFamily: SERIF, fontSize: 15, fontWeight: 600, color: rankTint(i), width: 22 }}>{i + 1}</span>
-              <div style={{ width: 34, height: 34, borderRadius: "50%", background: mine ? C.mint : C.mintSoft, color: mine ? "#fff" : C.mintDeep, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 600, flexShrink: 0 }}>{initials(r.alias)}</div>
+              <Avatar alias={r.alias} size={34} highlight={mine} />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 14, fontWeight: 600, color: C.ink }}>{r.alias}{mine && <span style={{ fontWeight: 400, color: C.mint }}> · you</span>}</div>
-                <div style={{ fontSize: 11, color: C.hint }}>{r.affiliation_display}{masked && <span style={{ fontStyle: "italic" }}> · small group</span>}</div>
+                <div style={{ fontSize: 11, color: C.hint }}>{r.affiliation_display}</div>
               </div>
               <div style={{ textAlign: "right" }}>
                 <div style={{ fontSize: 15, fontWeight: 600, color: C.mintDeep }}>{r.total_points} pts</div>
@@ -328,7 +351,7 @@ function Community({ myId }) {
         })}
         {rows.length === 0 && <p style={{ fontSize: 13, color: C.hint }}>No one has logged anything yet. Be the first.</p>}
       </div>
-      <div style={{ fontSize: 11, color: C.hint, textAlign: "center", marginTop: 16, lineHeight: 1.5 }}>Entities with fewer than 4 people show only their type, to protect privacy.</div>
+      <div style={{ fontSize: 11, color: C.hint, textAlign: "center", marginTop: 16, lineHeight: 1.5 }}>Independent effort only — your AI use stays private.</div>
     </div>
   );
 }
@@ -336,9 +359,16 @@ function Community({ myId }) {
 // ── Competitions ─────────────────────────────────────────────────────────
 function Competitions({ userId }) {
   const [comps, setComps] = useState(null); const [mine, setMine] = useState(new Set());
+  const [adminChallenges, setAdminChallenges] = useState([]);
   const [name, setName] = useState(""); const [metric, setMetric] = useState("independent_minutes");
   const [days, setDays] = useState(7); const [creating, setCreating] = useState(false); const [err, setErr] = useState("");
-  async function load() { try { setComps(await fetchCompetitions()); setMine(await fetchMyCompetitions(userId)); } catch { setErr("Could not load competitions."); } }
+  async function load() {
+    try {
+      setComps(await fetchCompetitions());
+      setMine(await fetchMyCompetitions(userId));
+      setAdminChallenges(await fetchAdminChallenges());
+    } catch { setErr("Could not load competitions."); }
+  }
   useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
   async function create() {
     if (!name.trim()) return; setCreating(true); setErr("");
@@ -352,6 +382,23 @@ function Competitions({ userId }) {
   if (!comps) return <div style={card}><p style={{ color: C.hint, fontSize: 14 }}>Loading competitions…</p></div>;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      {adminChallenges.length > 0 && (
+        <div style={{ background: "#eef6f1", border: `1.5px solid ${C.mintBar}`, borderRadius: 14, padding: "1.25rem 1.4rem" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+            <i className="ti ti-star" style={{ color: C.mintDeep }} aria-hidden="true" />
+            <span style={{ fontFamily: SERIF, fontSize: 18, fontWeight: 600, color: C.ink }}>Featured challenges</span>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {adminChallenges.map((c) => (
+              <div key={c.id} style={{ background: "#fff", border: `0.5px solid ${C.mintBar}`, borderRadius: 10, padding: "12px 14px" }}>
+                <div style={{ fontSize: 14, fontWeight: 600, color: C.ink }}>{c.title}</div>
+                {c.description && <div style={{ fontSize: 12, color: C.body, marginTop: 3, lineHeight: 1.45 }}>{c.description}</div>}
+                <div style={{ fontSize: 11, color: C.hint, marginTop: 6 }}>{c.metric === "points" ? "Most points" : "Most independent study"} · ends {c.ends_on}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       <div style={card}>
         <div style={{ fontFamily: SERIF, fontSize: 18, fontWeight: 600, color: C.ink, marginBottom: 2 }}>Start a competition</div>
         <p style={{ fontSize: 12, color: C.hint, marginTop: 0, marginBottom: 14 }}>Friendly, opt-in and anonymised — ranked by alias on independent effort or points.</p>
@@ -443,6 +490,63 @@ function DailyLog({ existing, streak, onSave }) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span style={{ fontSize: 12, color: C.hint }}>This entry: <span style={{ color: C.mintDeep, fontWeight: 600 }}>{base + bonus} pts</span>{bonus > 0 && <span> ({base} + {bonus} streak)</span>}</span>
         <button onClick={() => { onSave(draft); setSaved(true); }} style={{ padding: "10px 20px", background: C.mintDeep, color: "#fff", border: "none", borderRadius: 9, fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: SANS }}>{saved ? "Saved ✓" : existing ? "Update today" : "Save today"}</button>
+      </div>
+    </div>
+  );
+}
+
+// ── Admin panel (v5) ──────────────────────────────────────────────────────
+function AdminPanel({ userId }) {
+  const [challenges, setChallenges] = useState(null);
+  const [title, setTitle] = useState(""); const [description, setDescription] = useState("");
+  const [metric, setMetric] = useState("independent_minutes"); const [days, setDays] = useState(7);
+  const [busy, setBusy] = useState(false); const [err, setErr] = useState("");
+  async function load() { try { setChallenges(await fetchAdminChallenges()); } catch { setErr("Could not load challenges."); } }
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
+  async function publish() {
+    if (!title.trim()) return; setBusy(true); setErr("");
+    try {
+      const starts = todayKey(); const end = new Date(); end.setDate(end.getDate() + Number(days));
+      await createAdminChallenge({ title: title.trim(), description: description.trim(), metric, startsOn: starts, endsOn: end.toISOString().slice(0, 10), userId });
+      setTitle(""); setDescription(""); await load();
+    } catch (e) { setErr(e.message || "Could not publish."); } finally { setBusy(false); }
+  }
+  async function remove(id) { try { await deleteAdminChallenge(id); await load(); } catch { setErr("Could not delete."); } }
+  if (err) return <div style={card}><p style={{ color: C.apricotInk, fontSize: 14 }}>{err}</p></div>;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <div style={card}>
+        <div style={{ fontFamily: SERIF, fontSize: 18, fontWeight: 600, color: C.ink, marginBottom: 2 }}>Publish a challenge</div>
+        <p style={{ fontSize: 12, color: C.hint, marginTop: 0, marginBottom: 14 }}>Featured at the top of every student's Competitions tab, shown to everyone.</p>
+        <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Challenge title — e.g. AI-free Friday" style={{ ...input, marginBottom: 10 }} />
+        <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Short description (optional)" style={{ ...input, minHeight: 56, marginBottom: 10, resize: "vertical" }} />
+        <div style={{ display: "flex", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+          <select value={metric} onChange={(e) => setMetric(e.target.value)} style={{ ...input, width: "auto", flex: 1 }}>
+            <option value="independent_minutes">Most independent study</option>
+            <option value="points">Most points</option>
+          </select>
+          <select value={days} onChange={(e) => setDays(e.target.value)} style={{ ...input, width: "auto", flex: 1 }}>
+            <option value={7}>1 week</option><option value={14}>2 weeks</option><option value={30}>1 month</option>
+          </select>
+        </div>
+        <button onClick={publish} disabled={!title.trim() || busy} style={{ ...primaryBtn(!!title.trim() && !busy), width: "auto", padding: "10px 20px" }}>{busy ? "Publishing…" : "Publish to everyone"}</button>
+      </div>
+      <div style={card}>
+        <div style={{ fontFamily: SERIF, fontSize: 18, fontWeight: 600, color: C.ink, marginBottom: 14 }}>Published challenges</div>
+        {!challenges ? <p style={{ fontSize: 13, color: C.hint }}>Loading…</p> : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {challenges.map((c) => (
+              <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: 12, borderRadius: 10, background: C.bone, border: `0.5px solid ${C.line}` }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: C.ink }}>{c.title}</div>
+                  <div style={{ fontSize: 11, color: C.hint }}>{c.metric === "points" ? "Most points" : "Most independent study"} · ends {c.ends_on}</div>
+                </div>
+                <button onClick={() => remove(c.id)} style={{ padding: "8px 14px", borderRadius: 8, border: `0.5px solid ${C.line}`, background: "#fff", color: C.apricotInk, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: SANS }}>Delete</button>
+              </div>
+            ))}
+            {challenges.length === 0 && <p style={{ fontSize: 13, color: C.hint }}>No challenges published yet.</p>}
+          </div>
+        )}
       </div>
     </div>
   );

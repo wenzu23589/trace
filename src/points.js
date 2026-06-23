@@ -65,3 +65,28 @@ export function independentShare(e) {
   if (total === 0) return null;
   return Math.round(((e.independentMinutes || 0) / total) * 100);
 }
+
+// ── Streak helpers (v5) ────────────────────────────────────────────────────
+// Generic consecutive-day counter ending today (or yesterday if today's not
+// logged yet). `qualifies(entry)` decides whether a given day counts.
+export function streakOf(entries, qualifies) {
+  const todayK = new Date().toISOString().slice(0, 10);
+  let cursor = todayK;
+  if (!entries[cursor] || !qualifies(entries[cursor])) {
+    const y = new Date(); y.setDate(y.getDate() - 1);
+    cursor = y.toISOString().slice(0, 10);
+  }
+  let n = 0;
+  while (entries[cursor] && qualifies(entries[cursor])) {
+    n++;
+    const d = new Date(cursor); d.setDate(d.getDate() - 1);
+    cursor = d.toISOString().slice(0, 10);
+  }
+  return n;
+}
+
+export const STREAKS = {
+  logging:     { label: "Logging",     icon: "ti-flame",   test: () => true },
+  independent: { label: "Independent", icon: "ti-book",    test: (e) => (e.independentMinutes || 0) > 0 },
+  reflection:  { label: "Reflection",  icon: "ti-pencil",  test: (e) => (e.reflection || "").trim().split(/\s+/).filter(Boolean).length >= POINTS.reflection.minWords },
+};
