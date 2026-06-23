@@ -266,3 +266,9 @@ export async function deleteNotification(id) {
   const { error } = await supabase.from("notifications").delete().eq("id", id);
   if (error) throw error;
 }
+
+// ── Tour (v11) ─────────────────────────────────────────────────────────────
+export async function markTourDone(userId) {
+  const { error } = await supabase.from("profiles").update({ tour_done: true }).eq("id", userId);
+  if (error) throw error;
+}

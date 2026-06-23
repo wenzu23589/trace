@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import Avatar from "./Avatar.jsx";
 import Companion, { COMPANION_VARIANTS, moodFromEntries, MOODS } from "./Companion.jsx";
+import Tour from "./Tour.jsx";
 import {
   supabaseConfigured, AFFILIATIONS, AFFILIATION_TYPES,
   signUp, signIn, signOut, getSession, onAuthChange,
@@ -9,6 +10,7 @@ import {
   fetchCommunity, fetchCompetitions, createCompetition, joinCompetition, fetchMyCompetitions,
   fetchAdminChallenges, createAdminChallenge, deleteAdminChallenge,
   fetchNotifications, markNotificationsRead, createNotification, fetchAllNotifications, deleteNotification,
+  markTourDone,
 } from "./supabaseClient.js";
 import { POINTS, DAILY_MAX, MILESTONES, basePointsForEntry, streakBonus, pointsForEntry, streakOf, STREAKS } from "./points.js";
 import { DEFAULT_ACTIVITIES, RELIANCE_LEVELS, TIME_BANDS, relianceToIndependence, dayIndependence, relianceByActivityType, independenceSeries, weeklyAverages, adaptivePrompt } from "./activities.js";
@@ -92,10 +94,20 @@ function BalanceBars({ entries }) {
 function Bell({ userId, affiliation }) {
   const [notes, setNotes] = useState([]);
   const [open, setOpen] = useState(false);
+  const wrapRef = useRef(null);
   async function load() {
     try { setNotes(await fetchNotifications(userId, affiliation)); } catch (e) { console.error(e); }
   }
   useEffect(() => { load(); const t = setInterval(load, 60000); return () => clearInterval(t); /* eslint-disable-next-line */ }, []);
+  // close when clicking outside the bell/panel, or pressing Escape
+  useEffect(() => {
+    if (!open) return;
+    function onDown(e) { if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false); }
+    function onKey(e) { if (e.key === "Escape") setOpen(false); }
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onDown); document.removeEventListener("keydown", onKey); };
+  }, [open]);
   const unread = notes.filter((n) => !n.read);
   async function toggle() {
     const next = !open; setOpen(next);
@@ -105,7 +117,7 @@ function Bell({ userId, affiliation }) {
   }
   function fmt(ts) { const d = new Date(ts); return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }); }
   return (
-    <div style={{ position: "relative" }}>
+    <div ref={wrapRef} style={{ position: "relative" }}>
       <button onClick={toggle} aria-label="Notifications" style={{ position: "relative", background: "none", border: "none", cursor: "pointer", color: C.faint, fontSize: 22, lineHeight: 1, padding: 4 }}>
         <i className="ti ti-bell" aria-hidden="true" />
         {unread.length > 0 && (
@@ -213,7 +225,8 @@ export default function TRACE() {
   const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
   const [entries, setEntries] = useState({});
-  const [tab, setTab] = useState("track");
+  const [tab, setTab] = useState("today");
+  const [showTour, setShowTour] = useState(false);
 
   useEffect(() => {
     if (!supabaseConfigured) { setStage("error"); return; }
@@ -237,6 +250,23 @@ export default function TRACE() {
       setEntries(await fetchEntries(s.user.id));
       setStage("app");
     } catch (e) { console.error(e); setStage("profile"); }
+  }
+
+  // auto-show the tour once for users who haven't completed it
+  useEffect(() => {
+    if (stage === "app" && profile && !profile.tour_done) {
+      const t = setTimeout(() => { setShowTour(true); }, 600); // let the UI settle first; tour sets its own tab
+      return () => clearTimeout(t);
+    }
+  }, [stage, profile]);
+
+  async function finishTour() {
+    setShowTour(false);
+    setTab("today");
+    if (profile && !profile.tour_done) {
+      setProfile({ ...profile, tour_done: true });
+      try { await markTourDone(session.user.id); } catch (e) { console.error(e); }
+    }
   }
 
   const stats = useMemo(() => {
@@ -287,7 +317,7 @@ export default function TRACE() {
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-          <Bell userId={session.user.id} affiliation={profile.affiliation} />
+          <span data-tour="bell"><Bell userId={session.user.id} affiliation={profile.affiliation} /></span>
           <div style={{ textAlign: "right" }}>
             <div style={{ fontFamily: SERIF, fontSize: 30, fontWeight: 600, color: C.mintDeep }}>{stats.totalPoints}</div>
             <div style={lbl}>points</div>
@@ -296,80 +326,89 @@ export default function TRACE() {
       </div>
 
       {/* tabs */}
-      <div style={{ display: "flex", gap: 6, marginBottom: 18 }}>
-        {[["track", "Track"], ["community", "Community"], ["compete", "Competitions"], ...(profile.is_admin ? [["admin", "Admin"]] : [])].map(([id, t]) => (
+      <div data-tour="tabs" style={{ display: "flex", gap: 6, marginBottom: 18 }}>
+        {[["today", "Today"], ["dashboard", "Dashboard"], ["community", "Community"], ["compete", "Competitions"], ...(profile.is_admin ? [["admin", "Admin"]] : [])].map(([id, t]) => (
           <button key={id} onClick={() => setTab(id)}
             style={{ padding: "8px 16px", borderRadius: 9, border: `0.5px solid ${tab === id ? C.mint : C.line}`, background: tab === id ? C.mint : "#fff", color: tab === id ? "#fff" : C.body, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: SANS }}>{t}</button>
         ))}
       </div>
 
-      {tab === "track" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          {/* companion */}
-          {(() => {
-            const mood = moodFromEntries(entries);
-            return (
-              <div style={{ ...card, display: "flex", flexDirection: "column", alignItems: "center", paddingTop: "1.5rem", paddingBottom: "1.5rem" }}>
-                <Companion variant={profile.companion || "sage"} mood={mood} size={120} />
-                <div style={{ fontFamily: SERIF, fontSize: 17, fontWeight: 600, color: C.ink, marginTop: 8 }}>{MOODS[mood].label}</div>
-                <div style={{ fontSize: 12, color: C.faint, marginTop: 2, textAlign: "center", maxWidth: 300 }}>
-                  {mood === "thriving" && "Thriving on your independent effort — keep it up."}
-                  {mood === "happy" && "Happy with your steady, independent work."}
-                  {mood === "content" && "Ticking along. A little independent study lifts the mood."}
-                  {mood === "sleepy" && "Resting — log a day to wake your companion."}
-                  {mood === "drained" && "A bit drained. Some independent work will perk it back up."}
-                </div>
+      {(tab === "today" || tab === "dashboard") && (() => {
+        const mood = moodFromEntries(entries);
+        const moodNote = {
+          thriving: "Thriving on your independent effort — keep it up.",
+          happy: "Happy with your steady, independent work.",
+          content: "Ticking along. A little independent study lifts the mood.",
+          sleepy: "Resting — log a day to wake your companion.",
+          drained: "A bit drained. Some independent work will perk it back up.",
+        }[mood];
+        const Compan = (
+          <div data-tour="companion" style={{ ...card, display: "flex", flexDirection: "column", alignItems: "center", paddingTop: "1.5rem", paddingBottom: "1.5rem" }}>
+            <Companion variant={profile.companion || "sage"} mood={mood} size={120} />
+            <div style={{ fontFamily: SERIF, fontSize: 17, fontWeight: 600, color: C.ink, marginTop: 8 }}>{MOODS[mood].label}</div>
+            <div style={{ fontSize: 12, color: C.faint, marginTop: 2, textAlign: "center", maxWidth: 300 }}>{moodNote}</div>
+          </div>
+        );
+
+        if (tab === "today") {
+          return (
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              {Compan}
+              <div data-tour="log">
+                <DailyLog existing={today} streak={stats.streak}
+                  onSave={async (entry) => {
+                    const independence = dayIndependence(entry.activities);
+                    const pts = pointsForEntry(entry, today ? stats.streak : stats.streak + 1);
+                    const withPoints = { ...entry, independence, points: pts };
+                    const nextEntries = { ...entries, [todayKey()]: withPoints };
+                    setEntries(nextEntries);
+                    try { await saveEntry(session.user.id, todayKey(), withPoints); } catch (e) { console.error(e); }
+                  }} />
               </div>
-            );
-          })()}
-
-          {/* prominent streaks */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
-            {["logging", "independent", "reflection"].map((key) => {
-              const s = STREAKS[key]; const n = stats.streaks[key];
-              return (
-                <div key={key} style={{ background: n > 0 ? "#eef6f1" : "#fff", border: `0.5px solid ${n > 0 ? C.mintBar : C.line}`, borderRadius: 12, padding: "0.9rem 1rem", textAlign: "center" }}>
-                  <div style={{ fontSize: 22, color: n > 0 ? C.mint : C.hint }}><i className={`ti ${s.icon}`} aria-hidden="true" /></div>
-                  <div style={{ fontFamily: SERIF, fontSize: 26, fontWeight: 600, color: C.ink, lineHeight: 1.1 }}>{n}</div>
-                  <div style={{ fontSize: 11, color: C.faint }}>{s.label} streak</div>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* metric tiles */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 12 }}>
-            <Tile icon="ti-book" tint={C.mintDeep} label="Independence" value={stats.weekIndep === null ? "—" : stats.weekIndep + "%"} unit="this wk" />
-            <Tile icon="ti-checklist" tint={C.apricotInk} label="Today" value={stats.todayIndep === null ? "—" : stats.todayIndep + "%"} unit="your own" />
-            <Tile icon="ti-list-check" tint={C.mintDeep} label="Activities" value={stats.todayActivities} unit="today" />
-          </div>
-
-          {/* milestone progress */}
-          <div style={card}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 10 }}>
-              <span style={{ fontSize: 14, color: C.ink, fontWeight: 600 }}>{last ? last.label : "Just getting started"}</span>
-              {next && <span style={{ fontSize: 12, color: C.hint }}>{next.at - stats.totalPoints} pts to {next.label}</span>}
             </div>
-            <div style={{ height: 8, background: C.lineSoft, borderRadius: 4, overflow: "hidden" }}>
-              <div style={{ height: "100%", width: `${next ? Math.min(100, (stats.totalPoints / next.at) * 100) : 100}%`, background: C.mint }} />
+          );
+        }
+
+        // dashboard
+        return (
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            {Compan}
+
+            <div data-tour="streaks" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
+              {["logging", "independent", "reflection"].map((key) => {
+                const s = STREAKS[key]; const n = stats.streaks[key];
+                return (
+                  <div key={key} style={{ background: n > 0 ? "#eef6f1" : "#fff", border: `0.5px solid ${n > 0 ? C.mintBar : C.line}`, borderRadius: 12, padding: "0.9rem 1rem", textAlign: "center" }}>
+                    <div style={{ fontSize: 22, color: n > 0 ? C.mint : C.hint }}><i className={`ti ${s.icon}`} aria-hidden="true" /></div>
+                    <div style={{ fontFamily: SERIF, fontSize: 26, fontWeight: 600, color: C.ink, lineHeight: 1.1 }}>{n}</div>
+                    <div style={{ fontSize: 11, color: C.faint }}>{s.label} streak</div>
+                  </div>
+                );
+              })}
             </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 12 }}>
+              <Tile icon="ti-book" tint={C.mintDeep} label="Independence" value={stats.weekIndep === null ? "—" : stats.weekIndep + "%"} unit="this wk" />
+              <Tile icon="ti-checklist" tint={C.apricotInk} label="Today" value={stats.todayIndep === null ? "—" : stats.todayIndep + "%"} unit="your own" />
+              <Tile icon="ti-list-check" tint={C.mintDeep} label="Activities" value={stats.todayActivities} unit="today" />
+            </div>
+
+            <div style={card}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 10 }}>
+                <span style={{ fontSize: 14, color: C.ink, fontWeight: 600 }}>{last ? last.label : "Just getting started"}</span>
+                {next && <span style={{ fontSize: 12, color: C.hint }}>{next.at - stats.totalPoints} pts to {next.label}</span>}
+              </div>
+              <div style={{ height: 8, background: C.lineSoft, borderRadius: 4, overflow: "hidden" }}>
+                <div style={{ height: "100%", width: `${next ? Math.min(100, (stats.totalPoints / next.at) * 100) : 100}%`, background: C.mint }} />
+              </div>
+            </div>
+
+            <div style={card}><BalanceBars entries={entries} /></div>
+
+            <Insights entries={entries} />
           </div>
-
-          <div style={card}><BalanceBars entries={entries} /></div>
-
-          <Insights entries={entries} />
-
-          <DailyLog existing={today} streak={stats.streak}
-            onSave={async (entry) => {
-              const independence = dayIndependence(entry.activities);
-              const pts = pointsForEntry(entry, today ? stats.streak : stats.streak + 1);
-              const withPoints = { ...entry, independence, points: pts };
-              const nextEntries = { ...entries, [todayKey()]: withPoints };
-              setEntries(nextEntries);
-              try { await saveEntry(session.user.id, todayKey(), withPoints); } catch (e) { console.error(e); }
-            }} />
-        </div>
-      )}
+        );
+      })()}
 
       {tab === "community" && <Community myId={session.user.id} />}
       {tab === "compete" && <Competitions userId={session.user.id} />}
@@ -377,8 +416,12 @@ export default function TRACE() {
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 18 }}>
         <span style={{ fontSize: 11, color: C.hint }}>EASE Study 2 · rule-based, no AI components</span>
-        <button onClick={async () => { await signOut(); }} style={{ background: "none", border: "none", color: C.hint, fontSize: 12, cursor: "pointer", textDecoration: "underline", fontFamily: SANS }}>Sign out</button>
+        <div style={{ display: "flex", gap: 14 }}>
+          <button onClick={() => setShowTour(true)} style={{ background: "none", border: "none", color: C.hint, fontSize: 12, cursor: "pointer", textDecoration: "underline", fontFamily: SANS }}>How it works</button>
+          <button onClick={async () => { await signOut(); }} style={{ background: "none", border: "none", color: C.hint, fontSize: 12, cursor: "pointer", textDecoration: "underline", fontFamily: SANS }}>Sign out</button>
+        </div>
       </div>
+      {showTour && <Tour onClose={finishTour} setTab={setTab} />}
     </Shell>
   );
 }
